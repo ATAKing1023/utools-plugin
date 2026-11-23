@@ -1,33 +1,67 @@
 {
   "main": "index.html",
-  "preload": "preload.js",
   "logo": "logo.png",
   "development": {
     "main": "http://localhost:5173"
   },
+  "pluginSetting": {
+    "single": false
+  },
   "features": [
     {
-      "code": "hello",
-      "explain": "打个招呼",
+      "code": "timestamp",
+      "explain": "日期时间格式转换",
+      "description": "日期时间格式转换",
       "cmds": [
-        "hello"
+        "时间戳转换"
       ]
     },
     {
-      "code": "read-text",
-      "explain": "读 txt、md 文档示例",
+      "code": "uuid",
+      "explain": "生成 UUID",
+      "description": "生成 UUID",
       "cmds": [
-        "读文档示例",
-        {
-          "type": "files",
-          "fileType": "file",
-          "extensions": [
-            "txt",
-            "md"
-          ],
-          "maxLength": 1,
-          "label": "读文档示例"
-        }
+        "UUID 生成"
+      ]
+    },
+    {
+      "code": "base64",
+      "explain": "Base64 编码与解码",
+      "description": "Base64 编码与解码",
+      "cmds": [
+        "Base64 编解码"
+      ]
+    },
+    {
+      "code": "url",
+      "explain": "URL 编码与解码",
+      "description": "URL 编码与解码",
+      "cmds": [
+        "URL 编解码"
+      ]
+    },
+    {
+      "code": "diff",
+      "explain": "文本差异对比",
+      "description": "文本差异对比",
+      "cmds": [
+        "文本 Diff"
+      ]
+    },
+    {
+      "code": "json",
+      "explain": "JSON 可视化与格式化",
+      "description": "JSON 可视化与格式化",
+      "cmds": [
+        "JSON 工具"
+      ]
+    },
+    {
+      "code": "xml",
+      "explain": "XML 可视化与格式化",
+      "description": "XML 可视化与格式化",
+      "cmds": [
+        "XML 工具"
       ]
     }
   ]
