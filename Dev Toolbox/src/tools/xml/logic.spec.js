@@ -31,9 +31,10 @@ describe('xml logic', () => {
   })
 
   it('formats with two-space indentation and preserves special nodes', () => {
-    const result = formatXmlText(
-      '<root><a x="1"><b>text</b></a><!--c--><![CDATA[x<y]]><empty/></root>'
-    )
+    const input =
+      '<root><a x="1"><b>text</b></a>' +
+      '<data><![CDATA[x<y]]></data><!--c--><empty/></root>'
+    const result = formatXmlText(input)
 
     expect(result).toEqual({
       ok: true,
@@ -42,13 +43,50 @@ describe('xml logic', () => {
         '  <a x="1">',
         '    <b>text</b>',
         '  </a>',
+        '  <data><![CDATA[x<y]]></data>',
         '  <!--c-->',
-        '  <![CDATA[x<y]]>',
         '  <empty/>',
         '</root>'
       ].join('\n')
     })
     expect(validateXml(result.value).ok).toBe(true)
+  })
+
+  it('preserves direct CDATA text when formatting and reparsing', () => {
+    const input =
+      '<root><code><![CDATA[  significant  ]]></code>' +
+      '<note><![CDATA[a]]><b>c</b></note></root>'
+    const result = formatXmlText(input)
+
+    expect(result).toEqual({
+      ok: true,
+      value: [
+        '<root>',
+        '  <code><![CDATA[  significant  ]]></code>',
+        '  <note><![CDATA[a]]><b>c</b></note>',
+        '</root>'
+      ].join('\n')
+    })
+    expect(validateXml(result.value).ok).toBe(true)
+
+    const inputDocument = parseXmlDocument(input)
+    const outputDocument = parseXmlDocument(result.value)
+    expect(outputDocument.ok).toBe(true)
+    expect(outputDocument.document.querySelector('code').textContent).toBe(
+      inputDocument.document.querySelector('code').textContent
+    )
+    expect(outputDocument.document.querySelector('note').textContent).toBe(
+      inputDocument.document.querySelector('note').textContent
+    )
+    expect(outputDocument.document.querySelector('code').textContent).toBe(
+      '  significant  '
+    )
+    expect(outputDocument.document.querySelector('note').textContent).toBe(
+      'ac'
+    )
+    expect(
+      outputDocument.document.querySelector('code').firstChild.nodeValue
+    ).toBe('  significant  ')
   })
 
   it('preserves parsed attribute order and escapes attribute values', () => {
@@ -290,6 +328,39 @@ describe('xml logic', () => {
     expect(result.value).toBe(
       '<?xml version="1.0" encoding="UTF-8"?>\n<root>\n  <x>1</x>\n</root>'
     )
+  })
+
+  it('keeps the XML declaration before an xml-stylesheet PI', () => {
+    const declaration = '<?xml version="1.0" encoding="UTF-8"?>'
+    const stylesheet =
+      '<?xml-stylesheet type="text/xsl" href="style.xsl"?>'
+    const result = formatXmlText(
+      [
+        declaration,
+        stylesheet,
+        '<root><a>1</a></root>'
+      ].join('\n')
+    )
+
+    expect(result).toEqual({
+      ok: true,
+      value: [
+        declaration,
+        stylesheet,
+        '<root>',
+        '  <a>1</a>',
+        '</root>'
+      ].join('\n')
+    })
+    expect(result.value.split('\n')[0]).toBe(declaration)
+    expect(result.value.match(/<\?xml\s/g)).toHaveLength(1)
+    expect(parseXmlDocument(result.value).ok).toBe(true)
+
+    const stylesheetOnly = formatXmlText(`${stylesheet}<root/>`)
+    expect(stylesheetOnly).toEqual({
+      ok: true,
+      value: [stylesheet, '<root/>'].join('\n')
+    })
   })
 
   it('extracts Chromium and jsdom parser positions without fixed wording', () => {

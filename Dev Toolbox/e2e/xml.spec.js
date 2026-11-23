@@ -163,6 +163,107 @@ test('preserves mixed and preserve-space text in the production formatter', asyn
   expect(errors).toEqual([])
 })
 
+test('preserves direct CDATA text through production formatting', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  const input =
+    '<root><code><![CDATA[  significant  ]]></code>' +
+    '<note><![CDATA[a]]><b>c</b></note></root>'
+
+  await page.locator('#xml-input').fill(input)
+  await page.getByRole('tab', { name: '格式化' }).click()
+
+  const formatted = await page.locator('.output-row__value').textContent()
+  expect(formatted).toBe(
+    [
+      '<root>',
+      '  <code><![CDATA[  significant  ]]></code>',
+      '  <note><![CDATA[a]]><b>c</b></note>',
+      '</root>'
+    ].join('\n')
+  )
+
+  const comparison = await page.evaluate(
+    ({ inputXml, formattedXml }) => {
+      const parse = (xml) => {
+        const document = new DOMParser().parseFromString(
+          xml,
+          'application/xml'
+        )
+        return {
+          error: document.querySelector('parsererror')?.textContent || null,
+          code: document.querySelector('code')?.textContent ?? null,
+          note: document.querySelector('note')?.textContent ?? null
+        }
+      }
+
+      return {
+        input: parse(inputXml),
+        output: parse(formattedXml)
+      }
+    },
+    { inputXml: input, formattedXml: formatted }
+  )
+
+  expect(comparison.input.error).toBeNull()
+  expect(comparison.output.error).toBeNull()
+  expect(comparison.output).toMatchObject({
+    code: comparison.input.code,
+    note: comparison.input.note
+  })
+  expect(comparison.output.code).toBe('  significant  ')
+  expect(comparison.output.note).toBe('ac')
+  expect(errors).toEqual([])
+})
+
+test('keeps the XML declaration before an xml-stylesheet PI', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  const declaration = '<?xml version="1.0" encoding="UTF-8"?>'
+  const stylesheet =
+    '<?xml-stylesheet type="text/xsl" href="style.xsl"?>'
+  const input = [
+    declaration,
+    stylesheet,
+    '<root><a>1</a></root>'
+  ].join('\n')
+
+  await page.locator('#xml-input').fill(input)
+  await page.getByRole('tab', { name: '格式化' }).click()
+
+  const formatted = await page.locator('.output-row__value').textContent()
+  const lines = formatted.split('\n')
+  expect(lines[0]).toBe(declaration)
+  expect(lines[1]).toBe(stylesheet)
+  expect(formatted.match(/<\?xml\s/g)).toHaveLength(1)
+
+  const reparsed = await page.evaluate((xml) => {
+    const document = new DOMParser().parseFromString(xml, 'application/xml')
+    return {
+      error: document.querySelector('parsererror')?.textContent || null,
+      anchorText: document.querySelector('a')?.textContent ?? null,
+      stylesheet: Array.from(document.childNodes).some(
+        (node) =>
+          node.nodeType === Node.PROCESSING_INSTRUCTION_NODE &&
+          node.target === 'xml-stylesheet'
+      )
+    }
+  }, formatted)
+
+  expect(reparsed).toEqual({
+    error: null,
+    anchorText: '1',
+    stylesheet: true
+  })
+  expect(errors).toEqual([])
+})
+
 test('preserves newline-plus-indent mixed text after production formatting', async ({
   page
 }) => {

@@ -70,6 +70,35 @@ describe('xml tree model', () => {
     })
   })
 
+  it('keeps direct CDATA-only and CDATA-plus-element content in hierarchy', () => {
+    const result = buildXmlTree(
+      '<root><code><![CDATA[  significant  ]]></code>' +
+        '<note><![CDATA[a]]><b>c</b></note></root>'
+    )
+    const root = result.nodes[0]
+    const code = root.children.find((node) => node.label === 'code')
+    const note = root.children.find((node) => node.label === 'note')
+
+    expect(code.children).toEqual([
+      expect.objectContaining({
+        label: '#cdata',
+        kind: 'cdata',
+        value: '  significant  '
+      })
+    ])
+    expect(note.children).toEqual([
+      expect.objectContaining({
+        label: '#cdata',
+        kind: 'cdata',
+        value: 'a'
+      }),
+      expect.objectContaining({
+        label: 'b',
+        kind: 'element'
+      })
+    ])
+  })
+
   it('retains indentation and text-node whitespace without trimming', () => {
     const result = buildXmlTree('<root>\n  <item> value </item>\n</root>')
     const root = result.nodes[0]

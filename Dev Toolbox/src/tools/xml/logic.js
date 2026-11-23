@@ -450,6 +450,14 @@ function serializeElementInline(element, inheritedSpace) {
     .join('')}</${name}>`
 }
 
+function containsDirectTextContent(children) {
+  return children.some(
+    (child) =>
+      child.nodeType === TEXT_NODE ||
+      child.nodeType === CDATA_SECTION_NODE
+  )
+}
+
 function serializeElement(
   element,
   depth,
@@ -467,7 +475,7 @@ function serializeElement(
 
   if (
     spaceMode === 'preserve' ||
-    children.some((child) => child.nodeType === TEXT_NODE)
+    containsDirectTextContent(children)
   ) {
     return `${padding}<${name}${attributes}>${children
       .map((child) => serializeInlineNode(child, spaceMode))
@@ -515,8 +523,12 @@ function serializeTopLevelNode(node, source) {
 
 function extractXmlDeclaration(value) {
   if (typeof value !== 'string') return ''
-  const match = /^\uFEFF?\s*(<\?xml[\s\S]*?\?>)/i.exec(value)
+  const match = /^\uFEFF?\s*(<\?xml\s+[\s\S]*?\?>)/i.exec(value)
   return match ? match[1].trim() : ''
+}
+
+function isXmlDeclaration(value) {
+  return /^<\?xml(?:\s|$)/i.test(String(value).trimStart())
 }
 
 export function formatXmlText(value) {
@@ -532,7 +544,7 @@ export function formatXmlText(value) {
       .filter(Boolean)
     const declaration = extractXmlDeclaration(value)
 
-    if (declaration && !lines[0]?.toLowerCase().startsWith('<?xml')) {
+    if (declaration && !isXmlDeclaration(lines[0] ?? '')) {
       lines.unshift(declaration)
     }
 
