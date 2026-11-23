@@ -151,5 +151,71 @@ test('persists an extra timezone through out/enter and stays usable at 375px', a
   await expect(page.locator('#timestamp-input')).toBeVisible()
   await expect(page.locator('.output-row')).toHaveCount(6)
   await expect(page.locator('.timezone-trigger')).toBeVisible()
+
+  const valueBoxes = await page.locator('.output-row__value').evaluateAll(
+    (elements) =>
+      elements.map((element) => {
+        const box = element.getBoundingClientRect()
+        return {
+          text: element.textContent,
+          width: box.width,
+          height: box.height
+        }
+      })
+  )
+  expect(valueBoxes).toHaveLength(6)
+  for (const box of valueBoxes) {
+    expect(box.width).toBeGreaterThanOrEqual(160)
+    expect(box.height).toBeGreaterThan(0)
+  }
+
+  const labels = page.locator('.output-row__label')
+  const copyControls = page.locator('.output-row__copy')
+  await expect(labels).toHaveCount(6)
+  await expect(copyControls).toHaveCount(6)
+  const controlBoxes = await copyControls.evaluateAll((elements) =>
+    elements.map((element) => {
+      const box = element.getBoundingClientRect()
+      return { width: box.width, height: box.height }
+    })
+  )
+  for (let index = 0; index < 6; index += 1) {
+    await expect(labels.nth(index)).toBeVisible()
+    await expect(copyControls.nth(index)).toBeVisible()
+    await expect(copyControls.nth(index)).toBeEnabled()
+    expect(controlBoxes[index].width).toBeGreaterThanOrEqual(48)
+    expect(controlBoxes[index].height).toBeGreaterThan(0)
+  }
+
+  await page.evaluate(() =>
+    window.scrollTo(0, document.documentElement.scrollHeight)
+  )
+  const overlapWithTimezoneTrigger = await page.evaluate(() => {
+    const copy = document
+      .querySelector('.output-row:last-child .output-row__copy')
+      .getBoundingClientRect()
+    const trigger = document
+      .querySelector('.timezone-trigger')
+      .getBoundingClientRect()
+
+    return !(
+      copy.right <= trigger.left ||
+      copy.left >= trigger.right ||
+      copy.bottom <= trigger.top ||
+      copy.top >= trigger.bottom
+    )
+  })
+  expect(overlapWithTimezoneTrigger).toBe(false)
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page
+    .locator('.output-row')
+    .filter({ hasText: 'UTC+1 欧洲中部时区' })
+    .locator('.output-row__copy')
+    .click()
+  const copyCalls = await page.evaluate(() => window.__utoolsTest.getCalls())
+  expect(copyCalls.copyText).toEqual(['2026-11-23 02:43:11'])
+  expect(copyCalls.hideMainWindow).toHaveLength(1)
+
   expect(errors).toEqual([])
 })

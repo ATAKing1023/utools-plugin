@@ -334,6 +334,29 @@ onMounted(() => {
     font-size: 18px;
   }
 
+  :deep(.output-row) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px 10px;
+  }
+
+  :deep(.output-row__label) {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+
+  :deep(.output-row__value) {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+    width: 100%;
+  }
+
+  :deep(.output-row__copy) {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
   .timezone-control {
     right: 14px;
     bottom: 14px;
