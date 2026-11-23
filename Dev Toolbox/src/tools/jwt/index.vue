@@ -352,7 +352,7 @@ function isCurrentSigning(operationGeneration, snapshot) {
 }
 
 async function verifyToken() {
-  if (!canVerify.value) return
+  if (verificationPending.value || !canVerify.value) return
 
   const token = decodedToken.value
   const snapshot = {
@@ -402,7 +402,7 @@ async function verifyToken() {
 }
 
 async function signAndGenerate() {
-  if (!canSign.value) return
+  if (signingPending.value || !canSign.value) return
 
   const draft = signingDraft.value.value
   const snapshot = {
@@ -546,7 +546,11 @@ onBeforeUnmount(() => {
             autocomplete="off"
             wrap="soft"
             placeholder="粘贴 compact JWS，例如 header.payload.signature"
-            aria-describedby="jwt-verify-status"
+            :aria-describedby="
+              decodeState.state === 'ready'
+                ? 'jwt-verify-status'
+                : undefined
+            "
             :aria-invalid="decodeState.state === 'error' ? 'true' : undefined"
           />
         </label>
@@ -565,19 +569,6 @@ onBeforeUnmount(() => {
           <div class="jwt-meta">
             <span>
               算法：<code class="jwt-code">{{ decodedToken.algorithm }}</code>
-            </span>
-            <span class="jwt-meta__status">
-              状态：
-              <strong
-                id="jwt-verify-status"
-                class="jwt-status"
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-                data-testid="jwt-verify-status"
-              >
-                {{ effectiveVerificationStatus }}
-              </strong>
             </span>
           </div>
 
@@ -625,12 +616,32 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="jwt-button"
-              :disabled="!canVerify"
+              data-testid="jwt-verify-button"
+              :disabled="!canVerify && !verificationPending"
+              :aria-disabled="
+                verificationPending || !canVerify ? 'true' : undefined
+              "
+              :aria-busy="verificationPending ? 'true' : undefined"
               @click="verifyToken"
             >
               {{ verificationPending ? '验证中…' : '验证签名' }}
             </button>
           </div>
+
+          <p class="jwt-status-line">
+            <span>状态：</span>
+            <strong
+              id="jwt-verify-status"
+              class="jwt-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              tabindex="0"
+              data-testid="jwt-verify-status"
+            >
+              {{ effectiveVerificationStatus }}
+            </strong>
+          </p>
 
           <p id="jwt-verify-secret-help" class="jwt-help">
             密钥只保存在当前内存，不会复制、记录或发送。
@@ -748,12 +759,27 @@ onBeforeUnmount(() => {
           <button
             type="button"
             class="jwt-button"
-            :disabled="!canSign"
+            data-testid="jwt-sign-button"
+            :disabled="!canSign && !signingPending"
+            :aria-disabled="signingPending || !canSign ? 'true' : undefined"
+            :aria-busy="signingPending ? 'true' : undefined"
             @click="signAndGenerate"
           >
             {{ signingPending ? '签名中…' : '签名并生成' }}
           </button>
         </div>
+
+        <p
+          id="jwt-sign-status"
+          class="jwt-meta__status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          tabindex="0"
+          data-testid="jwt-sign-status"
+        >
+          状态：<strong class="jwt-status">{{ signingStatus }}</strong>
+        </p>
 
         <p id="jwt-sign-secret-help" class="jwt-help">
           密钥只保存在当前内存，不会复制、记录或发送。
@@ -781,17 +807,6 @@ onBeforeUnmount(() => {
         />
 
         <ErrorNotice v-if="signingError" :message="signingError" />
-
-        <p
-          id="jwt-sign-status"
-          class="jwt-meta__status"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          data-testid="jwt-sign-status"
-        >
-          状态：<strong class="jwt-status">{{ signingStatus }}</strong>
-        </p>
 
         <OutputList
           v-if="generatedRows.length"
@@ -909,6 +924,24 @@ textarea.jwt-field__input {
   overflow-wrap: anywhere;
 }
 
+.jwt-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.jwt-status:focus-visible,
+.jwt-meta__status:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .jwt-verify,
 .jwt-signing-controls {
   display: flex;
@@ -946,6 +979,11 @@ textarea.jwt-field__input {
 .jwt-button:disabled {
   cursor: not-allowed;
   opacity: 0.52;
+}
+
+.jwt-button[aria-disabled='true']:not(:disabled) {
+  cursor: progress;
+  opacity: 0.65;
 }
 
 .jwt-button:focus-visible {

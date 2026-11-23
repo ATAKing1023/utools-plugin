@@ -253,6 +253,59 @@ async function expectNoPageOverflow(page) {
   expect(metrics.bodyWidth).toBeLessThanOrEqual(metrics.viewportWidth)
 }
 
+async function danglingAriaReferences(page) {
+  return page.evaluate(() => {
+    const referenceAttributes = [
+      'aria-describedby',
+      'aria-labelledby',
+      'aria-controls'
+    ]
+    const dangling = []
+
+    for (const element of document.querySelectorAll('*')) {
+      for (const attribute of referenceAttributes) {
+        const value = element.getAttribute(attribute)
+        if (!value) continue
+        for (const id of value.split(/\s+/).filter(Boolean)) {
+          if (!document.getElementById(id)) {
+            dangling.push({
+              element: element.tagName,
+              id: element.id,
+              attribute,
+              target: id
+            })
+          }
+        }
+      }
+    }
+
+    return dangling
+  })
+}
+
+async function delaySubtleOperations(page) {
+  await page.addInitScript(() => {
+    const calls = { sign: 0, verify: 0 }
+    window.__jwtCryptoCalls = calls
+    const prototype = Object.getPrototypeOf(globalThis.crypto.subtle)
+
+    for (const name of ['sign', 'verify']) {
+      const original = prototype[name]
+      prototype[name] = function delayedOperation(...args) {
+        calls[name] += 1
+        return new Promise((resolve, reject) => {
+          setTimeout(() => {
+            Promise.resolve(original.apply(this, args)).then(
+              resolve,
+              reject
+            )
+          }, 600)
+        })
+      }
+    }
+  })
+}
+
 async function expectControlUncovered(locator) {
   await locator.evaluate((element) => {
     element.scrollIntoView({ block: 'center', inline: 'nearest' })
@@ -397,6 +450,53 @@ test('verifies the correct secret and rejects wrong secrets and tampering', asyn
     '签名无效'
   )
   await expect(page.locator('.output-row')).toHaveCount(3)
+
+  expect(normalExternalRequests(collectors)).toEqual([])
+  expectNoConsoleOrPageErrors(collectors)
+})
+
+test('keeps ARIA references resolvable in empty, error, ready and encoder states', async ({
+  page
+}) => {
+  const collectors = attachCollectors(page)
+  await openJwt(page)
+
+  await expect(page.locator('[data-state="empty"]')).toBeVisible()
+  expect(await danglingAriaReferences(page)).toEqual([])
+
+  await page.getByLabel('JWT 输入').fill('not-a-jwt')
+  await expect(page.getByRole('alert')).toBeVisible()
+  expect(await danglingAriaReferences(page)).toEqual([])
+
+  await page.getByLabel('JWT 输入').fill(DECODE_TOKEN)
+  await expect(page.locator('.output-row')).toHaveCount(3)
+  expect(await danglingAriaReferences(page)).toEqual([])
+  await expect(page.getByLabel('JWT 输入')).toHaveAttribute(
+    'aria-describedby',
+    'jwt-verify-status'
+  )
+  expect(
+    await page.evaluate(() => ({
+      verify: document.querySelectorAll('#jwt-verify-status').length,
+      sign: document.querySelectorAll('#jwt-sign-status').length,
+      target: Boolean(document.getElementById('jwt-verify-status'))
+    }))
+  ).toEqual({ verify: 1, sign: 0, target: true })
+
+  await page.getByRole('tab', { name: '生成 / 签名' }).click()
+  expect(await danglingAriaReferences(page)).toEqual([])
+  expect(
+    await page.getByLabel('签名密钥', { exact: true }).getAttribute(
+      'aria-describedby'
+    )
+  ).toBe('jwt-sign-status jwt-sign-secret-help')
+  expect(
+    await page.evaluate(() => ({
+      verify: document.querySelectorAll('#jwt-verify-status').length,
+      sign: document.querySelectorAll('#jwt-sign-status').length,
+      target: Boolean(document.getElementById('jwt-sign-status'))
+    }))
+  ).toEqual({ verify: 0, sign: 1, target: true })
 
   expect(normalExternalRequests(collectors)).toEqual([])
   expectNoConsoleOrPageErrors(collectors)
@@ -935,6 +1035,73 @@ test('supports keyboard tabs, activation, copy shortcuts, labels and focus', asy
       entry.includes('output-row__copy')
     )
   ).toBe(true)
+
+  expect(normalExternalRequests(collectors)).toEqual([])
+  expectNoConsoleOrPageErrors(collectors)
+})
+
+test('preserves verify and sign focus through the pending state', async ({
+  page
+}) => {
+  const collectors = attachCollectors(page)
+  await delaySubtleOperations(page)
+  await openJwt(page)
+
+  await page.getByLabel('JWT 输入').fill(DECODE_TOKEN)
+  await page.getByLabel('验证密钥', { exact: true }).fill(DECODE_SECRET)
+  const verifyButton = page.getByTestId('jwt-verify-button')
+  const verifyStatus = page.getByTestId('jwt-verify-status')
+
+  await verifyButton.focus()
+  await page.keyboard.press('Enter')
+  await expect(verifyStatus).toHaveText('验证中…')
+  await expect(verifyButton).toBeFocused()
+  await expect(verifyButton).toHaveAttribute('aria-disabled', 'true')
+  await expect(verifyButton).toHaveAttribute('aria-busy', 'true')
+  expect(await verifyButton.getAttribute('disabled')).toBeNull()
+
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(100)
+  expect(
+    await page.evaluate(() => window.__jwtCryptoCalls.verify)
+  ).toBe(1)
+
+  await expect(verifyStatus).toHaveText('签名已验证')
+  await expect(verifyButton).toBeFocused()
+  expect(await verifyButton.getAttribute('disabled')).toBeNull()
+  expect(await verifyButton.getAttribute('aria-disabled')).toBeNull()
+  expect(await verifyButton.getAttribute('aria-busy')).toBeNull()
+
+  await page.keyboard.press('Tab')
+  await expect(verifyStatus).toBeFocused()
+
+  await page.getByRole('tab', { name: '生成 / 签名' }).click()
+  await page.getByLabel('签名密钥', { exact: true }).fill(ENCODE_SECRET)
+  const signButton = page.getByTestId('jwt-sign-button')
+  const signStatus = page.getByTestId('jwt-sign-status')
+
+  await signButton.focus()
+  await page.keyboard.press('Enter')
+  await expect(signStatus).toHaveText('状态：签名中…')
+  await expect(signButton).toBeFocused()
+  await expect(signButton).toHaveAttribute('aria-disabled', 'true')
+  await expect(signButton).toHaveAttribute('aria-busy', 'true')
+  expect(await signButton.getAttribute('disabled')).toBeNull()
+
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(100)
+  expect(
+    await page.evaluate(() => window.__jwtCryptoCalls.sign)
+  ).toBe(1)
+
+  await expect(signStatus).toHaveText('状态：签名完成')
+  await expect(signButton).toBeFocused()
+  expect(await signButton.getAttribute('disabled')).toBeNull()
+  expect(await signButton.getAttribute('aria-disabled')).toBeNull()
+  expect(await signButton.getAttribute('aria-busy')).toBeNull()
+
+  await page.keyboard.press('Tab')
+  await expect(signStatus).toBeFocused()
 
   expect(normalExternalRequests(collectors)).toEqual([])
   expectNoConsoleOrPageErrors(collectors)

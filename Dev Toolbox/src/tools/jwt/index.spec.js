@@ -102,6 +102,38 @@ function findButton(wrapper, text) {
     .find((button) => button.text() === text)
 }
 
+function danglingAriaReferences(wrapper) {
+  const elements = [
+    wrapper.element,
+    ...wrapper.element.querySelectorAll('*')
+  ]
+  const referenceAttributes = [
+    'aria-describedby',
+    'aria-labelledby',
+    'aria-controls'
+  ]
+  const dangling = []
+
+  for (const element of elements) {
+    for (const attribute of referenceAttributes) {
+      const value = element.getAttribute(attribute)
+      if (!value) continue
+      for (const id of value.split(/\s+/).filter(Boolean)) {
+        if (!document.getElementById(id)) {
+          dangling.push({
+            element: element.tagName,
+            id: element.id,
+            attribute,
+            target: id
+          })
+        }
+      }
+    }
+  }
+
+  return dangling
+}
+
 function createDeferredProvider() {
   const verifyCalls = []
   const signCalls = []
@@ -141,6 +173,30 @@ afterEach(() => {
 })
 
 describe('JWT decoder UI', () => {
+  it('keeps every ARIA reference resolvable across decoder states', async () => {
+    const { wrapper } = mountTool()
+    const token = wrapper.get('#jwt-token-input')
+
+    expect(danglingAriaReferences(wrapper)).toEqual([])
+
+    await token.setValue('malformed.invalid.token!')
+    expect(wrapper.get('[role="alert"]')).toBeTruthy()
+    expect(danglingAriaReferences(wrapper)).toEqual([])
+
+    await token.setValue(createUnsignedToken({ alg: 'HS256' }, {}))
+    await settle()
+    expect(danglingAriaReferences(wrapper)).toEqual([])
+    expect(token.attributes('aria-describedby')).toBe(
+      'jwt-verify-status'
+    )
+    expect(
+      wrapper.element.querySelectorAll('#jwt-verify-status')
+    ).toHaveLength(1)
+    expect(
+      document.getElementById('jwt-verify-status')
+    ).toBeTruthy()
+  })
+
   it('auto-focuses, starts unverified and displays exact decoded text', async () => {
     const signed = await createSignedToken()
     const { wrapper } = mountTool()
@@ -484,7 +540,16 @@ describe('JWT async safety', () => {
     expect(wrapper.get('[data-testid="jwt-verify-status"]').text()).toBe(
       '验证中…'
     )
-    expect(findButton(wrapper, '验证中…').attributes('disabled')).toBe('')
+    expect(
+      wrapper
+        .get('[data-testid="jwt-verify-button"]')
+        .attributes('disabled')
+    ).toBeUndefined()
+    expect(
+      wrapper
+        .get('[data-testid="jwt-verify-button"]')
+        .attributes('aria-disabled')
+    ).toBe('true')
 
     await wrapper.get('#jwt-token-input').setValue(`${signed.token}A`)
     expect(wrapper.get('[data-testid="jwt-verify-status"]').text()).toBe(
@@ -573,6 +638,65 @@ describe('JWT async safety', () => {
     expect(wrapper.get('[data-testid="jwt-verify-status"]').text()).toBe(
       '签名已验证'
     )
+  })
+
+  it('keeps pending verify and sign actions focusable and guards repeats', async () => {
+    const signed = await createSignedToken()
+    const { provider, verifyCalls, signCalls } = createDeferredProvider()
+    const { wrapper } = mountTool({ cryptoProvider: provider })
+
+    await wrapper.get('#jwt-token-input').setValue(signed.token)
+    await wrapper.get('#jwt-verify-secret').setValue(SECRET)
+    const verify = wrapper.get('[data-testid="jwt-verify-button"]')
+    verify.element.focus()
+    await verify.trigger('click')
+    await waitForCall(verifyCalls)
+
+    expect(document.activeElement).toBe(verify.element)
+    expect(verify.attributes('disabled')).toBeUndefined()
+    expect(verify.attributes('aria-disabled')).toBe('true')
+    expect(verify.attributes('aria-busy')).toBe('true')
+
+    await verify.trigger('click')
+    expect(verifyCalls).toHaveLength(1)
+
+    verifyCalls[0].resolve(true)
+    await waitForText(
+      wrapper,
+      '[data-testid="jwt-verify-status"]',
+      '签名已验证'
+    )
+    expect(document.activeElement).toBe(verify.element)
+    expect(verify.attributes('disabled')).toBeUndefined()
+    expect(verify.attributes('aria-disabled')).toBeUndefined()
+    expect(verify.attributes('aria-busy')).toBeUndefined()
+
+    await wrapper.get('[role="tab"][data-mode-id="encode"]').trigger('click')
+    await settle()
+    await wrapper.get('#jwt-sign-secret').setValue(SECRET)
+    const sign = wrapper.get('[data-testid="jwt-sign-button"]')
+    sign.element.focus()
+    await sign.trigger('click')
+    await waitForCall(signCalls)
+
+    expect(document.activeElement).toBe(sign.element)
+    expect(sign.attributes('disabled')).toBeUndefined()
+    expect(sign.attributes('aria-disabled')).toBe('true')
+    expect(sign.attributes('aria-busy')).toBe('true')
+
+    await sign.trigger('click')
+    expect(signCalls).toHaveLength(1)
+
+    signCalls[0].resolve(new Uint8Array(32))
+    await waitForText(
+      wrapper,
+      '[data-testid="jwt-sign-status"]',
+      '状态：签名完成'
+    )
+    expect(document.activeElement).toBe(sign.element)
+    expect(sign.attributes('disabled')).toBeUndefined()
+    expect(sign.attributes('aria-disabled')).toBeUndefined()
+    expect(sign.attributes('aria-busy')).toBeUndefined()
   })
 
   it('sanitises provider failures and keeps retry available', async () => {
@@ -842,7 +966,16 @@ describe('JWT encoder UI', () => {
     expect(wrapper.get('[data-testid="jwt-sign-status"]').text()).toBe(
       '状态：签名中…'
     )
-    expect(findButton(wrapper, '签名中…').attributes('disabled')).toBe('')
+    expect(
+      wrapper
+        .get('[data-testid="jwt-sign-button"]')
+        .attributes('disabled')
+    ).toBeUndefined()
+    expect(
+      wrapper
+        .get('[data-testid="jwt-sign-button"]')
+        .attributes('aria-disabled')
+    ).toBe('true')
     await vi.advanceTimersByTimeAsync(10_000)
     expect(wrapper.get('[data-testid="jwt-sign-status"]').text()).toBe(
       '状态：签名超时'
