@@ -6,11 +6,13 @@ import {
   collapseAllCardIds,
   fitGraphTransform,
   formatGraphValue,
+  graphKeyLabel,
   inspectJsonGraphLimits,
   layoutGraph,
   previewGraphValue,
   projectVisibleGraph,
   resetGraphTransform,
+  revealGraphRectTransform,
   semanticTypeOf,
   truncateGraphText,
   utf8ByteLength
@@ -212,6 +214,37 @@ describe('json graph model', () => {
     expect(graph.cards[0].rows[4].preview).toBe('"<script>bad()</script>"')
   })
 
+  it('labels every container edge with a visible key fallback', () => {
+    const graph = graphOf({
+      '': { empty: 1 },
+      '   ': { spaces: 2 },
+      '\n': { newline: 3 },
+      '[]': { punctuation: 4 },
+      normal: { value: 5 }
+    })
+
+    expect(graph.cards[0].rows.map((row) => row.displayLabel)).toEqual([
+      '""',
+      '"   "',
+      '"\\n"',
+      '[]',
+      'normal'
+    ])
+    expect(graph.edges.map((edge) => edge.label)).toEqual([
+      '""',
+      '"   "',
+      '"\\n"',
+      '[]',
+      'normal'
+    ])
+    expect(graph.edges.every((edge) => edge.label.trim().length > 0)).toBe(
+      true
+    )
+    expect(graphKeyLabel('')).toBe('""')
+    expect(graphKeyLabel('   ')).toBe('"   "')
+    expect(graphKeyLabel('normal')).toBe('normal')
+  })
+
   it('projects collapse state and hides descendant cards and edges', () => {
     const graph = graphOf({
       keep: 'yes',
@@ -331,6 +364,51 @@ describe('json graph layout', () => {
     expect(clampGraphScale(0.25)).toBe(0.25)
     expect(clampGraphScale(2)).toBe(2)
     expect(clampGraphScale(3)).toBe(2)
+  })
+
+  it('pans focused rectangles inside the viewport without changing scale', () => {
+    const viewport = { left: 20, top: 30, width: 600, height: 300 }
+    const transform = { scale: 0.25, x: 100, y: 80 }
+
+    expect(
+      revealGraphRectTransform(
+        transform,
+        viewport,
+        { left: 900, top: 120, right: 950, bottom: 140 },
+        10,
+        20
+      )
+    ).toEqual({ scale: 0.25, x: -240, y: 80 })
+
+    expect(
+      revealGraphRectTransform(
+        transform,
+        viewport,
+        { left: 30, top: 250, right: 60, bottom: 340 },
+        10,
+        20
+      )
+    ).toEqual({ scale: 0.25, x: 100, y: 50 })
+
+    expect(
+      revealGraphRectTransform(
+        transform,
+        viewport,
+        { left: 10, top: 20, right: 20, bottom: 25 },
+        10,
+        20
+      )
+    ).toEqual({ scale: 0.25, x: 120, y: 100 })
+
+    expect(
+      revealGraphRectTransform(
+        transform,
+        viewport,
+        { left: 200, top: 100, right: 250, bottom: 120 },
+        10,
+        20
+      )
+    ).toEqual(transform)
   })
 
   it('formats full inspection values and bounded previews without changing source text', () => {

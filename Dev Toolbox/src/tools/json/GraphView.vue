@@ -2,6 +2,7 @@
 import {
   computed,
   nextTick,
+  onBeforeUnmount,
   onMounted,
   ref,
   watch
@@ -16,6 +17,7 @@ import {
   layoutGraph,
   projectVisibleGraph,
   resetGraphTransform,
+  revealGraphRectTransform,
   truncateGraphText
 } from './graph.js'
 
@@ -32,9 +34,12 @@ const props = defineProps({
 
 const FALLBACK_VIEWPORT_WIDTH = 720
 const FALLBACK_VIEWPORT_HEIGHT = 420
+const FOCUS_REVEAL_PADDING = 16
+const FOCUS_REVEAL_BOTTOM_PADDING = 150
 
 const shellElement = ref(null)
 const viewportElement = ref(null)
+const inspectorElement = ref(null)
 const collapsedIds = ref(new Set())
 const transform = ref({ scale: 1, x: 0, y: 0 })
 const tooltip = ref(null)
@@ -179,7 +184,8 @@ function tooltipForItem(item) {
     focusKey: item.focusKey,
     path: item.path,
     type: item.type,
-    preview: item.preview
+    preview: item.preview,
+    cardId: item.cardId
   }
 }
 
@@ -214,18 +220,23 @@ function openInspector(item) {
   if (!item) return
   selected.value = {
     ...tooltipForItem(item),
-    value: item.value,
-    focusIndex: item.focusIndex
+    value: item.value
   }
   announce(`已打开 ${item.type} 检查器`)
 }
 
 function closeInspector({ restoreFocus = false } = {}) {
-  const focusIndex = selected.value?.focusIndex
+  const target = selected.value
+    ? {
+        focusKey: selected.value.focusKey,
+        cardId: selected.value.cardId
+      }
+    : null
+  tooltip.value = null
   selected.value = null
   announce('检查器已关闭')
-  if (restoreFocus && Number.isInteger(focusIndex)) {
-    nextTick(() => focusItemAt(focusIndex))
+  if (restoreFocus) {
+    nextTick(() => restoreFocusFor(target))
   }
 }
 
@@ -263,6 +274,77 @@ function focusItemAt(index) {
     `[data-graph-focus-index="${index}"]`
   )
   element?.focus?.({ preventScroll: true })
+  revealFocusedElement(element)
+}
+
+function revealFocusedElement(element) {
+  const viewport = viewportElement.value
+  if (
+    !element ||
+    !viewport ||
+    viewport.clientWidth <= 0 ||
+    viewport.clientHeight <= 0
+  ) {
+    return
+  }
+
+  const viewportRect = viewport.getBoundingClientRect()
+  const itemRect = element.getBoundingClientRect()
+  const next = revealGraphRectTransform(
+    transform.value,
+    {
+      left: viewportRect.left + viewport.clientLeft,
+      top: viewportRect.top + viewport.clientTop,
+      width: viewport.clientWidth,
+      height: viewport.clientHeight
+    },
+    itemRect,
+    FOCUS_REVEAL_PADDING,
+    FOCUS_REVEAL_BOTTOM_PADDING
+  )
+  if (
+    next.x !== transform.value.x ||
+    next.y !== transform.value.y
+  ) {
+    transform.value = next
+  }
+}
+
+function nearestVisibleCardIndex(cardId) {
+  const visibleCards = new Set(projection.value.cards.map((card) => card.id))
+  const cardMap = new Map(props.graph.cards.map((card) => [card.id, card]))
+  let currentId = cardId
+
+  while (currentId) {
+    if (visibleCards.has(currentId)) {
+      const index = focusIndexes.value.get(`card:${currentId}`)
+      if (Number.isInteger(index)) return index
+    }
+    currentId = cardMap.get(currentId)?.parentId ?? null
+  }
+
+  return null
+}
+
+function restoreFocusFor(target) {
+  if (!target) {
+    viewportElement.value?.focus()
+    return
+  }
+
+  const stableIndex = focusIndexes.value.get(target.focusKey)
+  if (Number.isInteger(stableIndex)) {
+    focusItemAt(stableIndex)
+    return
+  }
+
+  const fallbackIndex = nearestVisibleCardIndex(target.cardId)
+  if (Number.isInteger(fallbackIndex)) {
+    focusItemAt(fallbackIndex)
+    return
+  }
+
+  viewportElement.value?.focus()
 }
 
 function handleViewportFocus(event) {
@@ -304,10 +386,10 @@ function handleShellFocusOut(event) {
 
 function handleKeydown(event) {
   if (event.key === 'Escape') {
-    if (tooltip.value || selected.value) {
-      event.preventDefault()
-      closeOverlays()
-    }
+    if (!tooltip.value && !selected.value) return
+    event.preventDefault()
+    if (selected.value) closeInspector({ restoreFocus: true })
+    else closeOverlays()
     return
   }
 
@@ -365,8 +447,23 @@ function reconcileAfterVisibilityChange() {
   if (tooltip.value && !visibleKeys.has(tooltip.value.focusKey)) {
     tooltip.value = null
   }
-  if (selected.value && !visibleKeys.has(selected.value.focusKey)) {
+  const hiddenSelection =
+    selected.value && !visibleKeys.has(selected.value.focusKey)
+      ? {
+          focusKey: selected.value.focusKey,
+          cardId: selected.value.cardId
+        }
+      : null
+  const selectionHadFocus =
+    Boolean(hiddenSelection) &&
+    Boolean(
+      inspectorElement.value?.contains(document.activeElement)
+    )
+  if (hiddenSelection) {
     selected.value = null
+    if (selectionHadFocus) {
+      nextTick(() => restoreFocusFor(hiddenSelection))
+    }
   }
 
   const active = document.activeElement
@@ -375,7 +472,8 @@ function reconcileAfterVisibilityChange() {
     active.matches('[data-graph-focus-index]') &&
     !shellElement.value?.contains(active)
   ) {
-    focusItemAt(0)
+    if (hiddenSelection) restoreFocusFor(hiddenSelection)
+    else focusItemAt(0)
   }
 }
 
@@ -501,6 +599,16 @@ function finishPointer(event) {
   pointerDragging = false
 }
 
+function handleViewportPointerLeave() {
+  clearTooltip()
+  if (pointerState && !pointerDragging) pointerState = null
+}
+
+function handleWindowPointerEnd(event) {
+  if (!pointerState || pointerState.pointerId !== event.pointerId) return
+  finishPointer(event)
+}
+
 watch(
   () => props.graph,
   async (nextGraph, previousGraph) => {
@@ -515,8 +623,15 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('pointerup', handleWindowPointerEnd)
+  window.addEventListener('pointercancel', handleWindowPointerEnd)
   await nextTick()
   fitView(false)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerup', handleWindowPointerEnd)
+  window.removeEventListener('pointercancel', handleWindowPointerEnd)
 })
 </script>
 
@@ -592,7 +707,8 @@ onMounted(async () => {
         @pointermove="handlePointerMove"
         @pointerup="finishPointer"
         @pointercancel="finishPointer"
-        @pointerleave="clearTooltip"
+        @lostpointercapture="finishPointer"
+        @pointerleave="handleViewportPointerLeave"
         @wheel.prevent="handleWheel"
       >
         <div
@@ -717,7 +833,7 @@ onMounted(async () => {
                 @click.stop="handleRowClick($event, row)"
               >
                 <span class="graph-row__label">
-                  {{ row.label || '""' }}
+                  {{ row.displayLabel }}
                 </span>
                 <span class="graph-row__type">{{ row.type }}</span>
                 <span class="graph-row__preview">
@@ -749,6 +865,7 @@ onMounted(async () => {
 
       <aside
         v-if="selected"
+        ref="inspectorElement"
         class="json-graph__inspector"
         aria-label="JSON 检查器"
         data-testid="json-graph-inspector"

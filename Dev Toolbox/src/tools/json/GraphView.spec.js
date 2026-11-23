@@ -93,6 +93,22 @@ describe('GraphView', () => {
     expect(empty.wrapper.text()).toContain('0 项')
   })
 
+  it('renders visible edge labels for empty and whitespace container keys', async () => {
+    const { wrapper } = await mountGraph({
+      '': { empty: 1 },
+      '   ': { spaces: 2 }
+    })
+    const edgeLabels = wrapper
+      .findAll('.json-graph__edge text')
+      .map((label) => label.text())
+
+    expect(edgeLabels).toEqual(['""', '"   "'])
+    expect(edgeLabels.every((label) => label.trim().length > 0)).toBe(true)
+    expect(
+      rowByPath(wrapper, '$[""]').find('.graph-row__label').text()
+    ).toBe('""')
+  })
+
   it('shows the same path, type, and preview on hover and keyboard focus', async () => {
     const { wrapper } = await mountGraph(sample)
     const row = rowByPath(wrapper, '$["nested"]["deeper"]["count"]')
@@ -184,10 +200,13 @@ describe('GraphView', () => {
     expect(inspector.find('pre').text()).toBe(`"${longValue}"`)
     expect(inspector.find('pre').attributes('aria-label')).toBe('完整 JSON 值')
 
-    await row.trigger('keydown', { key: 'Escape' })
+    inspector.find('pre').element.focus()
+    await nextTick()
+    await inspector.find('pre').trigger('keydown', { key: 'Escape' })
     expect(wrapper.find('[data-testid="json-graph-inspector"]').exists()).toBe(
       false
     )
+    expect(document.activeElement).toBe(row.element)
 
     row.element.focus()
     await row.trigger('keydown', { key: 'Enter' })
@@ -199,6 +218,40 @@ describe('GraphView', () => {
       false
     )
     expect(document.activeElement).toBe(row.element)
+  })
+
+  it('restores focus by stable identity after collapse and falls back when hidden', async () => {
+    const { wrapper } = await mountGraph({
+      a: { deep: { value: 1 } },
+      b: { value: 2 }
+    })
+    const cardA = cardByPath(wrapper, '$["a"]')
+    const cardB = cardByPath(wrapper, '$["b"]')
+    const inspector = () =>
+      wrapper.find('[data-testid="json-graph-inspector"]')
+
+    await cardB.trigger('click')
+    expect(inspector().exists()).toBe(true)
+    await cardA
+      .findAll('button')
+      .find((button) => button.attributes('aria-label')?.includes('$["a"]'))
+      .trigger('click')
+    await flushPromises()
+    expect(inspector().exists()).toBe(true)
+    await inspector().get('[aria-label="关闭检查器"]').trigger('click')
+    await nextTick()
+    expect(document.activeElement).toBe(cardB.element)
+
+    await cardB.trigger('click')
+    expect(inspector().exists()).toBe(true)
+    inspector().find('pre').element.focus()
+    await nextTick()
+    cardByPath(wrapper, '$')
+      .find('.graph-card__collapse')
+      .element.click()
+    await flushPromises()
+    expect(inspector().exists()).toBe(false)
+    expect(document.activeElement).toBe(cardByPath(wrapper, '$').element)
   })
 
   it('supports per-card, collapse-all, and expand-all semantics with ARIA', async () => {

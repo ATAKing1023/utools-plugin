@@ -56,6 +56,75 @@ async function graphTransform(page) {
     }))
 }
 
+function nestedContainers(depth) {
+  let value = { leaf: 'end' }
+  for (let index = 0; index < depth - 1; index += 1) {
+    value = { child: value }
+  }
+  return value
+}
+
+async function activeGraphGeometry(page) {
+  return page.evaluate(() => {
+    const active = document.activeElement
+    const viewport = document
+      .querySelector('[data-testid="json-graph-viewport"]')
+      .getBoundingClientRect()
+    if (
+      !active ||
+      !(active instanceof Element) ||
+      !active.matches('[data-graph-focus-index]')
+    ) {
+      return {
+        valid: false,
+        tag: active?.tagName ?? null,
+        visibleWidth: 0,
+        visibleHeight: 0
+      }
+    }
+
+    const rect = active.getBoundingClientRect()
+    const visibleWidth = Math.max(
+      0,
+      Math.min(rect.right, viewport.right) - Math.max(rect.left, viewport.left)
+    )
+    const visibleHeight = Math.max(
+      0,
+      Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top)
+    )
+    const tolerance = 0.75
+    return {
+      valid: true,
+      tag: active.tagName,
+      path: active.getAttribute('data-graph-path'),
+      cardId: active.getAttribute('data-graph-card-id'),
+      visibleWidth,
+      visibleHeight,
+      fullyVisible:
+        rect.left >= viewport.left - tolerance &&
+        rect.right <= viewport.right + tolerance &&
+        rect.top >= viewport.top - tolerance &&
+        rect.bottom <= viewport.bottom + tolerance
+    }
+  })
+}
+
+async function expectFocusedInGraph(page) {
+  await expect
+    .poll(async () => {
+      const geometry = await activeGraphGeometry(page)
+      return geometry.valid && geometry.visibleWidth > 0 && geometry.visibleHeight > 0
+    })
+    .toBe(true)
+  return activeGraphGeometry(page)
+}
+
+async function waitForFrame(page) {
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => resolve()))
+  )
+}
+
 async function expectClean(errors, requests) {
   expect(errors).toEqual([])
   expect(requests).toEqual([])
@@ -260,6 +329,297 @@ test('renders deterministic graph structure and supports hover, focus, inspect, 
   await page.getByRole('button', { name: '全部展开' }).click()
   await expect(page.locator('.graph-card')).toHaveCount(5)
   await expect(page.locator('.json-graph__edge')).toHaveCount(4)
+
+  await expectClean(errors, requests)
+})
+
+test('keeps keyboard-focused items visible in large within-limit graphs', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  const requests = collectNetworkRequests(page)
+  await enterJson(page)
+
+  const cases = [
+    {
+      name: '128 levels',
+      cards: 128,
+      value: nestedContainers(128)
+    },
+    {
+      name: '2,000 rows',
+      cards: 1,
+      value: Object.fromEntries(
+        Array.from({ length: 2000 }, (_, index) => [`key${index}`, index])
+      )
+    },
+    {
+      name: '500 cards',
+      cards: 500,
+      value: Array.from({ length: 499 }, () => ({}))
+    }
+  ]
+
+  for (const graphCase of cases) {
+    await page.locator('#json-input').fill(JSON.stringify(graphCase.value))
+    await expect(page.locator('.graph-card')).toHaveCount(graphCase.cards)
+    await waitForFrame(page)
+
+    const viewport = page.locator('[data-testid="json-graph-viewport"]')
+    await viewport.focus()
+    const scrollBefore = await page.evaluate(() => ({
+      x: window.scrollX,
+      y: window.scrollY
+    }))
+
+    await page.keyboard.press('End')
+    let geometry = await expectFocusedInGraph(page)
+    expect(geometry.valid).toBe(true)
+    expect(geometry.fullyVisible).toBe(true)
+
+    for (let index = 0; index < 3; index += 1) {
+      await page.keyboard.press('ArrowLeft')
+      geometry = await expectFocusedInGraph(page)
+      expect(geometry.valid).toBe(true)
+      expect(geometry.fullyVisible).toBe(true)
+    }
+
+    expect(
+      await page.evaluate(() => ({
+        x: window.scrollX,
+        y: window.scrollY
+      }))
+    ).toEqual(scrollBefore)
+  }
+
+  await expectClean(errors, requests)
+})
+
+test('restores inspector focus by identity and falls back when hidden', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  const requests = collectNetworkRequests(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill(
+    JSON.stringify({
+      a: { deep: { value: 1 } },
+      b: { value: 2 },
+      c: { tail: true }
+    })
+  )
+
+  const inspector = page.locator('[data-testid="json-graph-inspector"]')
+  const rowB = page.getByRole('button', {
+    name: 'object $["b"]',
+    exact: true
+  })
+  await rowB.click()
+  await expect(inspector).toBeVisible()
+  await inspector.locator('pre').focus()
+  await page.keyboard.press('Escape')
+  await expect(inspector).toHaveCount(0)
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.activeElement?.getAttribute('data-graph-path')
+      )
+    )
+    .toBe('$["b"]')
+
+  const cardB = page.getByRole('group', {
+    name: 'object 卡片 $["b"]',
+    exact: true
+  })
+  await cardB.click({ position: { x: 80, y: 20 } })
+  await expect(inspector).toBeVisible()
+  await page.getByRole('button', {
+    name: '收起卡片 $["a"]',
+    exact: true
+  }).click()
+  await expect(inspector).toBeVisible()
+  await inspector.getByRole('button', { name: '关闭检查器' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.activeElement?.getAttribute('data-graph-card-id')
+      )
+    )
+    .toBe('$["b"]')
+
+  await cardB.click({ position: { x: 80, y: 20 } })
+  await expect(inspector).toBeVisible()
+  await inspector.locator('pre').focus()
+  await page.evaluate(() => {
+    document.querySelector('[aria-label="收起卡片 $"]')?.click()
+  })
+  await expect(inspector).toHaveCount(0)
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document.activeElement?.getAttribute('data-graph-card-id')
+      )
+    )
+    .toBe('$')
+  expect(
+    await page.evaluate(() => document.activeElement === document.body)
+  ).toBe(false)
+
+  await expectClean(errors, requests)
+})
+
+test('clears aborted pointer presses outside the viewport and on cancellation', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  const requests = collectNetworkRequests(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill(JSON.stringify(sample))
+  const viewport = page.locator('[data-testid="json-graph-viewport"]')
+  await expect(page.locator('.graph-card').first()).toBeVisible()
+  const box = await viewport.boundingBox()
+  expect(box).not.toBeNull()
+  await waitForFrame(page)
+  await waitForFrame(page)
+
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5)
+  await page.mouse.down()
+  await page.mouse.move(
+    box.x + box.width * 0.6 + 2,
+    box.y + box.height * 0.5 + 1
+  )
+  await waitForFrame(page)
+  const armed = await graphTransform(page)
+  await page.mouse.move(box.x + box.width * 0.4, box.y - 30)
+  await page.mouse.up()
+  await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.4)
+  await page.mouse.move(
+    box.x + box.width * 0.4 + 90,
+    box.y + box.height * 0.4 + 35,
+    { steps: 4 }
+  )
+  await waitForFrame(page)
+  expect(await graphTransform(page)).toEqual(armed)
+
+  await page.evaluate(() => {
+    const target = document.querySelector(
+      '[data-testid="json-graph-viewport"]'
+    )
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 71,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: 320,
+      clientY: 500
+    }
+    target.dispatchEvent(new PointerEvent('pointerdown', options))
+    target.dispatchEvent(
+      new PointerEvent('pointermove', {
+        ...options,
+        clientX: 350,
+        clientY: 500
+      })
+    )
+  })
+  await expect
+    .poll(async () => (await graphTransform(page)).x !== armed.x)
+    .toBe(true)
+  await page.evaluate(() => {
+    const target = document.querySelector(
+      '[data-testid="json-graph-viewport"]'
+    )
+    target.dispatchEvent(
+      new PointerEvent('pointercancel', {
+        bubbles: true,
+        pointerId: 71,
+        pointerType: 'mouse',
+        button: 0,
+        buttons: 0,
+        clientX: 350,
+        clientY: 500
+      })
+    )
+  })
+  const afterCancel = await graphTransform(page)
+  await page.evaluate(() => {
+    const target = document.querySelector(
+      '[data-testid="json-graph-viewport"]'
+    )
+    target.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        pointerId: 71,
+        pointerType: 'mouse',
+        button: 0,
+        buttons: 0,
+        clientX: 460,
+        clientY: 500
+      })
+    )
+  })
+  await waitForFrame(page)
+  expect(await graphTransform(page)).toEqual(afterCancel)
+
+  await page.evaluate(() => {
+    const target = document.querySelector(
+      '[data-testid="json-graph-viewport"]'
+    )
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 72,
+      pointerType: 'mouse',
+      button: 0,
+      buttons: 1,
+      clientX: 320,
+      clientY: 500
+    }
+    target.dispatchEvent(new PointerEvent('pointerdown', options))
+    target.dispatchEvent(
+      new PointerEvent('pointermove', {
+        ...options,
+        clientX: 340,
+        clientY: 500
+      })
+    )
+  })
+  await expect
+    .poll(async () => (await graphTransform(page)).x !== afterCancel.x)
+    .toBe(true)
+  await page.evaluate(() => {
+    const target = document.querySelector(
+      '[data-testid="json-graph-viewport"]'
+    )
+    target.dispatchEvent(
+      new PointerEvent('lostpointercapture', {
+        bubbles: true,
+        pointerId: 72,
+        pointerType: 'mouse'
+      })
+    )
+  })
+  const afterLostCapture = await graphTransform(page)
+  await page.evaluate(() => {
+    const target = document.querySelector(
+      '[data-testid="json-graph-viewport"]'
+    )
+    target.dispatchEvent(
+      new PointerEvent('pointermove', {
+        bubbles: true,
+        pointerId: 72,
+        pointerType: 'mouse',
+        button: 0,
+        buttons: 0,
+        clientX: 430,
+        clientY: 500
+      })
+    )
+  })
+  await waitForFrame(page)
+  expect(await graphTransform(page)).toEqual(afterLostCapture)
 
   await expectClean(errors, requests)
 })

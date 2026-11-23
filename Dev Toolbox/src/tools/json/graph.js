@@ -88,6 +88,11 @@ export function truncateGraphText(text, maximum = 96) {
   return `${source.slice(0, Math.max(0, limit - 1))}…`
 }
 
+export function graphKeyLabel(label) {
+  const source = String(label ?? '')
+  return source.trim().length === 0 ? JSON.stringify(source) : source
+}
+
 export function formatGraphValue(value, type = semanticTypeOf(value)) {
   if (type === 'object' || type === 'array') {
     return JSON.stringify(value, null, 2)
@@ -259,12 +264,14 @@ export function buildJsonGraph(value, inputText = inputTextOf(value)) {
     entries.forEach(([key, child], index) => {
       const path = childPath(id, key, isArray)
       const childType = semanticTypeOf(child)
+      const label = isArray ? `[${key}]` : String(key)
       const row = {
         id: `row:${path}:${index}`,
         path,
         cardId: id,
         index,
-        label: isArray ? `[${key}]` : String(key),
+        label,
+        displayLabel: isArray ? label : graphKeyLabel(label),
         type: childType,
         isContainer: isContainer(child),
         childId: isContainer(child) ? path : null,
@@ -279,10 +286,10 @@ export function buildJsonGraph(value, inputText = inputTextOf(value)) {
           id: `edge:${path}`,
           from: id,
           to: path,
-          label: row.label,
+          label: row.displayLabel,
           path
         })
-        createCard(child, path, row.label, depth + 1, id)
+        createCard(child, path, row.displayLabel, depth + 1, id)
       }
     })
 
@@ -517,4 +524,38 @@ export function resetGraphTransform(
     x: width / 2 - (root.x + root.width / 2),
     y: height / 2 - (root.y + root.height / 2)
   }
+}
+
+export function revealGraphRectTransform(
+  transform,
+  viewport,
+  rect,
+  padding = 16,
+  bottomPadding = padding
+) {
+  const scale = Number.isFinite(transform?.scale) ? transform.scale : 1
+  let x = Number.isFinite(transform?.x) ? transform.x : 0
+  let y = Number.isFinite(transform?.y) ? transform.y : 0
+  const left = Number(viewport?.left) || 0
+  const top = Number(viewport?.top) || 0
+  const width = Math.max(0, Number(viewport?.width) || 0)
+  const height = Math.max(0, Number(viewport?.height) || 0)
+  const right = left + width
+  const bottom = top + height
+  const edgePadding = Math.max(0, Number(padding) || 0)
+  const lowerPadding = Math.max(0, Number(bottomPadding) || 0)
+
+  if (rect.left < left + edgePadding) {
+    x += left + edgePadding - rect.left
+  } else if (rect.right > right - edgePadding) {
+    x -= rect.right - (right - edgePadding)
+  }
+
+  if (rect.top < top + edgePadding) {
+    y += top + edgePadding - rect.top
+  } else if (rect.bottom > bottom - lowerPadding) {
+    y -= rect.bottom - (bottom - lowerPadding)
+  }
+
+  return { scale, x, y }
 }
