@@ -568,6 +568,62 @@ test('signs in the encoder, verifies the generated JWS and copies it exactly', a
   expectNoConsoleOrPageErrors(collectors)
 })
 
+test('signs exact editor JSON bytes after lossless minification', async ({
+  page
+}) => {
+  const collectors = attachCollectors(page)
+  const headerInput = '{ "typ" : "JWT", "alg" : "HS256" }'
+  const expectedHeader = '{"typ":"JWT","alg":"HS256"}'
+  const payloadInput = [
+    '{',
+    '  "big": 9007199254740993,',
+    '  "huge": 1e400,',
+    '  "dup": 1,',
+    '  "dup": 2,',
+    '  "neg": -0,',
+    '  "10": "a",',
+    '  "2": "b",',
+    '  "a": "c",',
+    String.raw`  "escaped": "\u4e2d",`,
+    '  "space": "  keep  this  ",',
+    '  "nested": { "items": [ 1, 2, { "x": true } ] }',
+    '}'
+  ].join('\n')
+  const expectedPayload = String.raw`{"big":9007199254740993,"huge":1e400,"dup":1,"dup":2,"neg":-0,"10":"a","2":"b","a":"c","escaped":"\u4e2d","space":"  keep  this  ","nested":{"items":[1,2,{"x":true}]}}`
+
+  await openJwt(page)
+  await page.getByRole('tab', { name: '生成 / 签名' }).click()
+  await page.getByLabel('Header JSON').fill(headerInput)
+  await page.getByLabel('Payload JSON').fill(payloadInput)
+  await page.getByLabel('签名密钥', { exact: true }).fill(ENCODE_SECRET)
+  await page.getByTestId('jwt-sign-button').click()
+  await expect(page.getByTestId('jwt-sign-status')).toHaveText(
+    '状态：签名完成'
+  )
+
+  const token = await page
+    .locator('[data-testid="jwt-generated-output"] .output-row__value')
+    .first()
+    .textContent()
+  const [headerSegment, payloadSegment, signatureSegment] =
+    token.split('.')
+
+  expect(Buffer.from(headerSegment, 'base64url').toString('utf8')).toBe(
+    expectedHeader
+  )
+  expect(Buffer.from(payloadSegment, 'base64url').toString('utf8')).toBe(
+    expectedPayload
+  )
+  expect(
+    createHmac(HASH_BY_ALGORITHM.HS256, ENCODE_SECRET)
+      .update(`${headerSegment}.${payloadSegment}`)
+      .digest('base64url')
+  ).toBe(signatureSegment)
+
+  expect(normalExternalRequests(collectors)).toEqual([])
+  expectNoConsoleOrPageErrors(collectors)
+})
+
 test('handles none, RS256, JWE, malformed Base64URL and limits distinctly', async ({
   page
 }) => {
@@ -584,6 +640,19 @@ test('handles none, RS256, JWE, malformed Base64URL and limits distinctly', asyn
   await expect(
     page.locator('.output-row__label').last()
   ).toHaveText('Signature (Base64URL, 0 字节)')
+  await expect(
+    page.getByRole('button', { name: '验证签名' })
+  ).toBeDisabled()
+
+  await tokenInput.fill(
+    unsignedToken({ alg: 'HS256', crit: [] }, {})
+  )
+  await expect(page.getByTestId('jwt-verify-status')).toHaveText(
+    '算法不支持'
+  )
+  await expect(page.getByTestId('jwt-unsupported-note')).toContainText(
+    'Header 包含 crit'
+  )
   await expect(
     page.getByRole('button', { name: '验证签名' })
   ).toBeDisabled()

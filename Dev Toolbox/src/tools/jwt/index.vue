@@ -196,7 +196,7 @@ const unsupportedExplanation = computed(() => {
     return '无签名或 alg:none 的 JWS 不能执行签名验证。'
   }
   if (token.unsupportedReason === 'header_crit') {
-    return 'Header crit 非空，签名验证已停用。'
+    return 'Header 包含 crit，签名验证已停用。'
   }
   if (token.unsupportedReason === 'header_b64') {
     return 'Header b64:false 不受支持，签名验证已停用。'

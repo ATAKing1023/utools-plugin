@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { encodeUtf8Base64Url } from './base64url.js'
+import {
+  decodeUtf8Base64Url,
+  encodeUtf8Base64Url
+} from './base64url.js'
 import {
   DEFAULT_HEADER,
   DEFAULT_PAYLOAD,
@@ -142,7 +145,7 @@ describe('compact JWS parsing', () => {
     ).toBe('payload_json')
   })
 
-  it('requires a string alg and blocks crit/b64 extensions', () => {
+  it('requires a string alg and blocks any crit/b64 extension', () => {
     expect(
       parseCompactJws(
         objectToken({ alg: null }, {})
@@ -158,11 +161,12 @@ describe('compact JWS parsing', () => {
         objectToken({ alg: 'HS256', b64: false }, {})
       ).value.status
     ).toBe('算法不支持')
-    expect(
-      parseCompactJws(
-        objectToken({ alg: 'HS256', crit: [] }, {})
-      ).value.canVerify
-    ).toBe(true)
+    const emptyCrit = parseCompactJws(
+      objectToken({ alg: 'HS256', crit: [] }, {})
+    ).value
+    expect(emptyCrit.status).toBe('算法不支持')
+    expect(emptyCrit.canVerify).toBe(false)
+    expect(emptyCrit.unsupportedReason).toBe('header_crit')
   })
 
   it('distinguishes none, empty-signature and unsupported algorithms', () => {
@@ -321,6 +325,86 @@ describe('JSON depth and field limits', () => {
 })
 
 describe('encoder preparation', () => {
+  const FIDELITY_HEADER = '{ "typ" : "JWT", "alg" : "HS256" }'
+  const MINIFIED_HEADER = '{"typ":"JWT","alg":"HS256"}'
+  const FIDELITY_CASES = [
+    {
+      name: 'large integer beyond 2^53',
+      payload: '{ "big": 9007199254740993 }',
+      expected: '{"big":9007199254740993}'
+    },
+    {
+      name: 'out-of-range exponent',
+      payload: '{ "huge": 1e400 }',
+      expected: '{"huge":1e400}'
+    },
+    {
+      name: 'duplicate keys',
+      payload: '{ "dup": 1, "dup": 2 }',
+      expected: '{"dup":1,"dup":2}'
+    },
+    {
+      name: 'negative zero',
+      payload: '{ "n": -0 }',
+      expected: '{"n":-0}'
+    },
+    {
+      name: 'integer-like key order',
+      payload: '{ "10": "a", "2": "b", "a": "c" }',
+      expected: '{"10":"a","2":"b","a":"c"}'
+    },
+    {
+      name: 'escaped Unicode',
+      payload: String.raw`{ "text": "\u4e2d" }`,
+      expected: String.raw`{"text":"\u4e2d"}`
+    },
+    {
+      name: 'whitespace and escapes inside strings',
+      payload: String.raw`{ "text": "  a b\t c\n d  " }`,
+      expected: String.raw`{"text":"  a b\t c\n d  "}`
+    },
+    {
+      name: 'nested structures',
+      payload: `{
+  "a": [ 1, { "b": [ 2, 3 ] } ]
+}`,
+      expected: '{"a":[1,{"b":[2,3]}]}'
+    }
+  ]
+
+  it.each(FIDELITY_CASES)(
+    'signs exact raw bytes for $name',
+    ({ payload, expected }) => {
+      const prepared = prepareSigningInput({
+        headerText: FIDELITY_HEADER,
+        payloadText: payload,
+        algorithm: 'HS256'
+      })
+
+      expect(prepared.ok).toBe(true)
+      expect(prepared.value.headerText).toBe(MINIFIED_HEADER)
+      expect(prepared.value.payloadText).toBe(expected)
+      expect(prepared.value.headerSegment).toBe(
+        segment(MINIFIED_HEADER)
+      )
+      expect(prepared.value.payloadSegment).toBe(segment(expected))
+      expect(prepared.value.signingInput).toBe(
+        `${segment(MINIFIED_HEADER)}.${segment(expected)}`
+      )
+
+      const finalized = finalizeGeneratedJws(
+        prepared.value.headerSegment,
+        prepared.value.payloadSegment,
+        SIGNATURE
+      )
+      expect(finalized.ok).toBe(true)
+      const [headerSegment, payloadSegment] =
+        finalized.value.token.split('.')
+      expect(decodeUtf8Base64Url(headerSegment)).toBe(MINIFIED_HEADER)
+      expect(decodeUtf8Base64Url(payloadSegment)).toBe(expected)
+    }
+  )
+
   it('minifies object JSON and creates the exact signing input', () => {
     const prepared = prepareSigningInput({
       headerText: '{ "typ" : "JWT", "alg" : "HS256" }',
@@ -409,6 +493,13 @@ describe('encoder preparation', () => {
     expect(
       prepareSigningInput({
         headerText: '{"alg":"HS256","crit":["exp"]}',
+        payloadText: '{}',
+        algorithm: 'HS256'
+      }).error.code
+    ).toBe('sign_crit_unsupported')
+    expect(
+      prepareSigningInput({
+        headerText: '{"alg":"HS256","crit":[]}',
         payloadText: '{}',
         algorithm: 'HS256'
       }).error.code

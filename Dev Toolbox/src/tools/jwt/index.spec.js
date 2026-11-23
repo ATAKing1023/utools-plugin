@@ -11,6 +11,7 @@ import {
 import { installUtoolsDouble } from '../../test/utoolsDouble.js'
 import JwtTool from './index.vue'
 import {
+  decodeUtf8Base64Url,
   encodeBase64Url,
   encodeUtf8Base64Url
 } from './base64url.js'
@@ -345,6 +346,20 @@ describe('JWT decoder UI', () => {
     )
     expect(wrapper.get('[data-testid="jwt-unsupported-note"]').text()).toContain(
       '仅 HS256'
+    )
+
+    await token.setValue(
+      createUnsignedToken({ alg: 'HS256', crit: [] }, {})
+    )
+    await settle()
+    expect(wrapper.get('[data-testid="jwt-verify-status"]').text()).toBe(
+      '算法不支持'
+    )
+    expect(wrapper.get('[data-testid="jwt-unsupported-note"]').text()).toContain(
+      'Header 包含 crit'
+    )
+    expect(findButton(wrapper, '验证签名').attributes('disabled')).toBe(
+      ''
     )
 
     await token.setValue('a.b.c.d.e')
@@ -886,6 +901,35 @@ describe('JWT encoder UI', () => {
     )
   })
 
+  it('generates the JWS from exact minified editor bytes', async () => {
+    const { wrapper } = mountTool()
+    await wrapper.get('[role="tab"][data-mode-id="encode"]').trigger('click')
+    await settle()
+    await wrapper.get('#jwt-header-input').setValue(
+      '{ "typ" : "JWT", "alg" : "HS256" }'
+    )
+    const payloadText = String.raw`{ "big": 9007199254740993, "neg": -0, "escaped": "\u4e2d", "space": "a  b" }`
+    await wrapper.get('#jwt-payload-input').setValue(payloadText)
+    await wrapper.get('#jwt-sign-secret').setValue(SECRET)
+    await findButton(wrapper, '签名并生成').trigger('click')
+    await waitForText(
+      wrapper,
+      '[data-testid="jwt-sign-status"]',
+      '状态：签名完成'
+    )
+
+    const token = wrapper
+      .get('[data-testid="jwt-generated-output"] .output-row__value')
+      .text()
+    const [headerSegment, payloadSegment] = token.split('.')
+    expect(decodeUtf8Base64Url(headerSegment)).toBe(
+      '{"typ":"JWT","alg":"HS256"}'
+    )
+    expect(decodeUtf8Base64Url(payloadSegment)).toBe(
+      String.raw`{"big":9007199254740993,"neg":-0,"escaped":"\u4e2d","space":"a  b"}`
+    )
+  })
+
   it('blocks algorithm mismatch, crit, invalid objects and overlong secrets', async () => {
     const { wrapper } = mountTool()
     await wrapper.get('[role="tab"][data-mode-id="encode"]').trigger('click')
@@ -902,7 +946,14 @@ describe('JWT encoder UI', () => {
       '{"alg":"HS256","crit":["exp"]}'
     )
     expect(wrapper.get('[role="alert"]').text()).toContain(
-      'Header crit 非空'
+      'Header crit 字段不受支持'
+    )
+
+    await wrapper.get('#jwt-header-input').setValue(
+      '{"alg":"HS256","crit":[]}'
+    )
+    expect(wrapper.get('[role="alert"]').text()).toContain(
+      'Header crit 字段不受支持'
     )
 
     await wrapper.get('#jwt-header-input').setValue('[]')

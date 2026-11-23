@@ -142,6 +142,42 @@ export function getJsonDepth(text) {
   return maximum
 }
 
+export function minifyJsonText(text) {
+  let output = ''
+  let inString = false
+  let escaped = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]
+
+    if (inString) {
+      output += character
+      if (escaped) {
+        escaped = false
+      } else if (character === '\\') {
+        escaped = true
+      } else if (character === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (character === '"') {
+      inString = true
+      output += character
+    } else if (
+      character !== ' ' &&
+      character !== '\t' &&
+      character !== '\n' &&
+      character !== '\r'
+    ) {
+      output += character
+    }
+  }
+
+  return output
+}
+
 export function parseJsonObject(text, options) {
   const { field, limits = JWT_LIMITS } = options
   const byteLimit =
@@ -243,9 +279,7 @@ function decodeField(segment, field, limits, utf8) {
 
 function headerUnsupportedReason(header) {
   if (hasOwn(header, 'crit')) {
-    const supported =
-      Array.isArray(header.crit) && header.crit.length === 0
-    if (!supported) return 'header_crit'
+    return 'header_crit'
   }
 
   if (hasOwn(header, 'b64') && header.b64 !== true) {
@@ -452,7 +486,7 @@ export function prepareSigningInput(input, options = {}) {
   if (unsupportedReason === 'header_crit') {
     return failure(
       'sign_crit_unsupported',
-      'Header crit 非空，生成已阻止',
+      'Header crit 字段不受支持，生成已阻止',
       'header'
     )
   }
@@ -464,18 +498,8 @@ export function prepareSigningInput(input, options = {}) {
     )
   }
 
-  let minifiedHeader
-  let minifiedPayload
-  try {
-    minifiedHeader = JSON.stringify(header)
-    minifiedPayload = JSON.stringify(payloadParsed.value.value)
-  } catch {
-    return failure(
-      'sign_json_serialization',
-      'Header 或 Payload 无法序列化为 JSON',
-      'header'
-    )
-  }
+  const minifiedHeader = minifyJsonText(input.headerText)
+  const minifiedPayload = minifyJsonText(input.payloadText)
 
   const headerSegment = encodeUtf8Base64Url(minifiedHeader)
   const payloadSegment = encodeUtf8Base64Url(minifiedPayload)
