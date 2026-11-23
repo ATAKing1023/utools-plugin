@@ -1,10 +1,38 @@
 import { mount } from '@vue/test-utils'
+import { defineComponent, h, nextTick, ref } from 'vue'
 import { describe, expect, it } from 'vitest'
 import EmptyState from './EmptyState.vue'
 import ErrorNotice from './ErrorNotice.vue'
 import ModeTabs from './ModeTabs.vue'
 import ToolFrame from './ToolFrame.vue'
 import TreeView from './TreeView.vue'
+
+function mountModeTabs({ initialMode = 'tree', modes } = {}) {
+  const Host = defineComponent({
+    setup() {
+      const mode = ref(initialMode)
+      return () =>
+        h(ModeTabs, {
+          modelValue: mode.value,
+          'onUpdate:modelValue': (value) => {
+            mode.value = value
+          },
+          ...(modes ? { modes } : {})
+        })
+    }
+  })
+
+  const wrapper = mount(Host, { attachTo: document.body })
+  return {
+    wrapper,
+    tabs() {
+      return wrapper.findAll('[role="tab"]')
+    },
+    currentMode() {
+      return wrapper.findComponent(ModeTabs).props('modelValue')
+    }
+  }
+}
 
 describe('ModeTabs', () => {
   it('provides accessible tabs and a v-model update', async () => {
@@ -43,6 +71,164 @@ describe('ModeTabs', () => {
       '可视化',
       '格式化'
     ])
+  })
+
+  it('moves selection and focus with ArrowRight and ArrowLeft', async () => {
+    const probe = mountModeTabs()
+    let tabs = probe.tabs()
+
+    expect(tabs[0].attributes('tabindex')).toBe('0')
+    expect(tabs[1].attributes('tabindex')).toBe('-1')
+    tabs[0].element.focus()
+
+    await tabs[0].trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+    tabs = probe.tabs()
+
+    expect(probe.currentMode()).toBe('format')
+    expect(tabs[0].attributes('aria-selected')).toBe('false')
+    expect(tabs[0].attributes('tabindex')).toBe('-1')
+    expect(tabs[1].attributes('aria-selected')).toBe('true')
+    expect(tabs[1].attributes('tabindex')).toBe('0')
+    expect(document.activeElement).toBe(tabs[1].element)
+
+    await tabs[1].trigger('keydown', { key: 'ArrowLeft' })
+    await nextTick()
+    tabs = probe.tabs()
+
+    expect(probe.currentMode()).toBe('tree')
+    expect(tabs[0].attributes('aria-selected')).toBe('true')
+    expect(tabs[0].attributes('tabindex')).toBe('0')
+    expect(tabs[1].attributes('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(tabs[0].element)
+  })
+
+  it('wraps at both ends and prevents the handled key default', async () => {
+    const probe = mountModeTabs()
+    let tabs = probe.tabs()
+    tabs[0].element.focus()
+
+    const leftEvent = new KeyboardEvent('keydown', {
+      key: 'ArrowLeft',
+      bubbles: true,
+      cancelable: true
+    })
+    tabs[0].element.dispatchEvent(leftEvent)
+    await nextTick()
+    tabs = probe.tabs()
+
+    expect(leftEvent.defaultPrevented).toBe(true)
+    expect(probe.currentMode()).toBe('format')
+    expect(document.activeElement).toBe(tabs[1].element)
+
+    const rightEvent = new KeyboardEvent('keydown', {
+      key: 'ArrowRight',
+      bubbles: true,
+      cancelable: true
+    })
+    tabs[1].element.dispatchEvent(rightEvent)
+    await nextTick()
+    tabs = probe.tabs()
+
+    expect(rightEvent.defaultPrevented).toBe(true)
+    expect(probe.currentMode()).toBe('tree')
+    expect(document.activeElement).toBe(tabs[0].element)
+  })
+
+  it('selects and focuses the first or last tab with Home and End', async () => {
+    const probe = mountModeTabs({ initialMode: 'format' })
+    let tabs = probe.tabs()
+    tabs[1].element.focus()
+
+    const homeEvent = new KeyboardEvent('keydown', {
+      key: 'Home',
+      bubbles: true,
+      cancelable: true
+    })
+    tabs[1].element.dispatchEvent(homeEvent)
+    await nextTick()
+    tabs = probe.tabs()
+
+    expect(homeEvent.defaultPrevented).toBe(true)
+    expect(probe.currentMode()).toBe('tree')
+    expect(tabs[0].attributes('tabindex')).toBe('0')
+    expect(tabs[1].attributes('tabindex')).toBe('-1')
+    expect(document.activeElement).toBe(tabs[0].element)
+
+    const endEvent = new KeyboardEvent('keydown', {
+      key: 'End',
+      bubbles: true,
+      cancelable: true
+    })
+    tabs[0].element.dispatchEvent(endEvent)
+    await nextTick()
+    tabs = probe.tabs()
+
+    expect(endEvent.defaultPrevented).toBe(true)
+    expect(probe.currentMode()).toBe('format')
+    expect(tabs[0].attributes('tabindex')).toBe('-1')
+    expect(tabs[1].attributes('tabindex')).toBe('0')
+    expect(tabs[1].attributes('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tabs[1].element)
+  })
+
+  it('handles unknown and disabled current values safely', async () => {
+    const unknown = mountModeTabs({ initialMode: 'missing' })
+    let tabs = unknown.tabs()
+
+    expect(tabs.map((tab) => tab.attributes('aria-selected'))).toEqual([
+      'false',
+      'false'
+    ])
+    expect(tabs[0].attributes('tabindex')).toBe('0')
+    expect(tabs[1].attributes('tabindex')).toBe('-1')
+
+    await tabs[0].trigger('keydown', { key: 'ArrowRight' })
+    await nextTick()
+    expect(unknown.currentMode()).toBe('format')
+    expect(document.activeElement).toBe(unknown.tabs()[1].element)
+
+    unknown.wrapper.unmount()
+    const disabled = mountModeTabs({
+      initialMode: 'tree',
+      modes: [
+        { id: 'tree', label: '可视化', disabled: true },
+        { id: 'format', label: '格式化' }
+      ]
+    })
+    tabs = disabled.tabs()
+
+    expect(tabs[0].attributes('disabled')).toBeDefined()
+    expect(tabs[0].attributes('tabindex')).toBe('-1')
+    expect(tabs[1].attributes('tabindex')).toBe('0')
+
+    tabs[1].element.focus()
+    await tabs[1].trigger('keydown', { key: 'ArrowLeft' })
+    await nextTick()
+    expect(disabled.currentMode()).toBe('format')
+    expect(document.activeElement).toBe(disabled.tabs()[1].element)
+  })
+
+  it('keeps a single enabled tab as a defined no-op', async () => {
+    const probe = mountModeTabs({
+      initialMode: 'tree',
+      modes: [{ id: 'tree', label: '可视化' }]
+    })
+    const tab = probe.tabs()[0]
+    tab.element.focus()
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'ArrowRight',
+      bubbles: true,
+      cancelable: true
+    })
+    tab.element.dispatchEvent(event)
+    await nextTick()
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(probe.currentMode()).toBe('tree')
+    expect(probe.tabs()[0].attributes('tabindex')).toBe('0')
+    expect(document.activeElement).toBe(probe.tabs()[0].element)
   })
 })
 
