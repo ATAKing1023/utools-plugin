@@ -40,6 +40,12 @@ export const FEATURES = Object.freeze([
     name: 'XML 工具',
     description: 'XML 可视化与格式化',
     cmd: 'XML 工具'
+  }),
+  Object.freeze({
+    code: 'jwt',
+    name: 'JWT 工具',
+    description: 'JWT 解析、验证与签名',
+    cmd: 'JWT 工具'
   })
 ])
 

@@ -63,6 +63,14 @@
       "cmds": [
         "XML 工具"
       ]
+    },
+    {
+      "code": "jwt",
+      "explain": "JWT 解析、验证与签名",
+      "description": "JWT 解析、验证与签名",
+      "cmds": [
+        "JWT 工具"
+      ]
     }
   ]
 }

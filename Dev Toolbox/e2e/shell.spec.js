@@ -5,6 +5,17 @@ import {
   test
 } from './fixtures/utools.js'
 
+const ROUTES = [
+  ['timestamp', '[data-tool="timestamp"]'],
+  ['uuid', '[data-tool="uuid"]'],
+  ['base64', '[data-tool="base64"]'],
+  ['url', '[data-tool="url"]'],
+  ['diff', '.diff-tool'],
+  ['json', '.json-tool'],
+  ['xml', '.xml-tool'],
+  ['jwt', '[data-tool="jwt"]']
+]
+
 test('boots the production build without errors and shows a defined empty state', async ({
   page
 }) => {
@@ -79,4 +90,44 @@ test('registers lifecycle callbacks once and exposes only the documented double 
   expect(surface.hasPlatform).toBe(false)
   expect(surface.calls.hideMainWindow).toEqual([])
   expect(surface.calls.copyText).toEqual([])
+})
+
+test('routes every one of the eight frozen features', async ({ page }) => {
+  const errors = collectPageErrors(page)
+  await openApp(page)
+
+  for (const [code, selector] of ROUTES) {
+    await page.evaluate((routeCode) => {
+      window.__utoolsTest.enter({
+        code: routeCode,
+        type: 'text',
+        payload: routeCode,
+        from: 'main'
+      })
+    }, code)
+
+    await expect(page.locator('.app-shell')).toHaveAttribute(
+      'data-route',
+      code
+    )
+    await expect(page.locator(selector)).toBeVisible()
+  }
+
+  await page.evaluate(() => {
+    window.__utoolsTest.enter({
+      code: 'not-a-feature',
+      type: 'text',
+      payload: 'unknown',
+      from: 'main'
+    })
+  })
+  await expect(page.locator('[role="status"]')).toContainText(
+    '未知功能：not-a-feature'
+  )
+
+  await page.evaluate(() => {
+    window.__utoolsTest.out(false)
+  })
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'empty')
+  expect(errors).toEqual([])
 })

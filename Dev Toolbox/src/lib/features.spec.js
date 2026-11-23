@@ -9,13 +9,14 @@ const expectedFeatures = [
   ['url', 'URL 编解码', 'URL 编码与解码', 'URL 编解码'],
   ['diff', '文本 Diff', '文本差异对比', '文本 Diff'],
   ['json', 'JSON 工具', 'JSON 可视化与格式化', 'JSON 工具'],
-  ['xml', 'XML 工具', 'XML 可视化与格式化', 'XML 工具']
+  ['xml', 'XML 工具', 'XML 可视化与格式化', 'XML 工具'],
+  ['jwt', 'JWT 工具', 'JWT 解析、验证与签名', 'JWT 工具']
 ]
 
 const pluginJson = JSON.parse(readFileSync('public/plugin.json', 'utf8'))
 
 describe('frozen feature metadata', () => {
-  it('exports exactly the seven frozen features and no extras', () => {
+  it('exports exactly the eight frozen features and no extras', () => {
     expect(FEATURES.map((feature) => feature.code)).toEqual(
       expectedFeatures.map(([code]) => code)
     )
