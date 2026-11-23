@@ -161,6 +161,63 @@ test('preserves mixed and preserve-space text in the production formatter', asyn
   expect(errors).toEqual([])
 })
 
+test('preserves newline-plus-indent mixed text after production formatting', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  const input = [
+    '<root>',
+    '  <p id="newline-space"><b>Hello</b>',
+    ' <i>world</i></p>',
+    '  <p id="newline-indent"><b>Hello</b>',
+    '  <i>world</i></p>',
+    '</root>'
+  ].join('\n')
+
+  await page.locator('#xml-input').fill(input)
+  await page.getByRole('tab', { name: '格式化' }).click()
+
+  const formatted = await page.locator('.output-row__value').textContent()
+  expect(formatted).toContain('<b>Hello</b>\n <i>world</i>')
+  expect(formatted).toContain('<b>Hello</b>\n  <i>world</i>')
+
+  const comparison = await page.evaluate(
+    ({ inputXml, formattedXml }) => {
+      const parse = (xml) => {
+        const document = new DOMParser().parseFromString(
+          xml,
+          'application/xml'
+        )
+        return {
+          error: document.querySelector('parsererror')?.textContent || null,
+          paragraphs: Array.from(document.querySelectorAll('p')).map(
+            (paragraph) => paragraph.textContent
+          )
+        }
+      }
+
+      return {
+        input: parse(inputXml),
+        output: parse(formattedXml)
+      }
+    },
+    { inputXml: input, formattedXml: formatted }
+  )
+
+  expect(comparison.input.error).toBeNull()
+  expect(comparison.output.error).toBeNull()
+  expect(comparison.output.paragraphs).toEqual(
+    comparison.input.paragraphs
+  )
+  expect(comparison.output.paragraphs).toEqual([
+    'Hello\n world',
+    'Hello\n  world'
+  ])
+  expect(errors).toEqual([])
+})
+
 test('keeps quote-bearing DOCTYPE output parsable and copyable', async ({
   page
 }) => {
@@ -185,6 +242,53 @@ test('keeps quote-bearing DOCTYPE output parsable and copyable', async ({
   }, formatted)
 
   expect(reparsed).toEqual({ error: null, systemId: 'a"b' })
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '复制 格式化结果' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toBe(formatted)
+  expect(errors).toEqual([])
+})
+
+test('ignores DOCTYPE-like comment and PI text in production formatting', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  const input = [
+    '<!-- fake <!DOCTYPE root SYSTEM "from-comment"> -->',
+    '<?probe fake <!DOCTYPE root PUBLIC "from-pi" "from-pi-system">?>',
+    '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'><root/>'
+  ].join('\n')
+
+  await page.locator('#xml-input').fill(input)
+  await page.getByRole('tab', { name: '格式化' }).click()
+
+  const formatted = await page.locator('.output-row__value').textContent()
+  expect(formatted).toContain(
+    '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'>'
+  )
+  expect(formatted).toContain('from-comment')
+  expect(formatted).toContain('from-pi')
+
+  const reparsed = await page.evaluate((xml) => {
+    const document = new DOMParser().parseFromString(xml, 'application/xml')
+    return {
+      error: document.querySelector('parsererror')?.textContent || null,
+      publicId: document.doctype?.publicId ?? null,
+      systemId: document.doctype?.systemId ?? null
+    }
+  }, formatted)
+
+  expect(reparsed).toEqual({
+    error: null,
+    publicId: "pub'id",
+    systemId: 'sys"id'
+  })
 
   await page.evaluate(() => window.__utoolsTest.resetCalls())
   await page.getByRole('button', { name: '复制 格式化结果' }).click()

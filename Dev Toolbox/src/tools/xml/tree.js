@@ -34,6 +34,19 @@ function hasNonWhitespaceText(element) {
   )
 }
 
+function hasTextContentDescendant(node) {
+  return childNodes(node).some((child) => {
+    if (child.nodeType === CDATA_SECTION_NODE) return true
+    if (child.nodeType === TEXT_NODE) {
+      return String(child.nodeValue ?? '').trim().length > 0
+    }
+    return (
+      child.nodeType === ELEMENT_NODE &&
+      hasTextContentDescendant(child)
+    )
+  })
+}
+
 function resolveSpaceMode(element, inheritedSpace = 'default') {
   const directValue = element.getAttribute?.('xml:space')
   const namespacedValue = element.getAttributeNS?.(XML_NAMESPACE, 'space')
@@ -44,15 +57,17 @@ function resolveSpaceMode(element, inheritedSpace = 'default') {
   return inheritedSpace
 }
 
-function shouldIgnoreFormattingWhitespace(element, spaceMode) {
-  if (spaceMode === 'preserve') return false
-  return hasElementChild(element) && !hasNonWhitespaceText(element)
-}
-
 function isIndentationWhitespace(value) {
   return (
     value.trim().length === 0 &&
     /(?:\r\n|\r|\n)[ \t]+$/.test(value)
+  )
+}
+
+function isBetweenElementSiblings(children, index) {
+  return (
+    children[index - 1]?.nodeType === ELEMENT_NODE &&
+    children[index + 1]?.nodeType === ELEMENT_NODE
   )
 }
 
@@ -70,20 +85,47 @@ function isBoundaryNewline(children, index) {
   return !hasElementBefore || !hasElementAfter
 }
 
+function shouldIgnoreFormattingWhitespace(
+  element,
+  children,
+  index,
+  spaceMode,
+  isDocumentRoot
+) {
+  const child = children[index]
+  if (
+    child.nodeType !== TEXT_NODE ||
+    String(child.nodeValue ?? '').trim().length > 0 ||
+    spaceMode === 'preserve'
+  ) {
+    return false
+  }
+  if (!hasElementChild(element) || hasNonWhitespaceText(element)) {
+    return false
+  }
+
+  const value = String(child.nodeValue ?? '')
+  const hasTextContent = hasTextContentDescendant(element)
+  if (!isDocumentRoot && hasTextContent) return false
+  if (hasTextContent && isBetweenElementSiblings(children, index)) {
+    return false
+  }
+
+  return isIndentationWhitespace(value) ||
+    isBoundaryNewline(children, index)
+}
+
 function createElementNode(
   element,
   id,
   depth,
-  inheritedSpace = 'default'
+  inheritedSpace = 'default',
+  isDocumentRoot = false
 ) {
   const children = Array.from(element.attributes || []).map((attribute) =>
     createAttributeNode(attribute, id)
   )
   const spaceMode = resolveSpaceMode(element, inheritedSpace)
-  const ignoreFormattingWhitespace = shouldIgnoreFormattingWhitespace(
-    element,
-    spaceMode
-  )
   const elementChildren = childNodes(element)
 
   elementChildren.forEach((child, sourceIndex) => {
@@ -93,7 +135,8 @@ function createElementNode(
           child,
           `${id}/${child.nodeName}[${sourceIndex}]`,
           depth + 1,
-          spaceMode
+          spaceMode,
+          false
         )
       )
       return
@@ -125,9 +168,13 @@ function createElementNode(
       const value = String(child.nodeValue ?? '')
       if (!value) return
       if (
-        ignoreFormattingWhitespace &&
-        (isIndentationWhitespace(value) ||
-          isBoundaryNewline(elementChildren, sourceIndex))
+        shouldIgnoreFormattingWhitespace(
+          element,
+          elementChildren,
+          sourceIndex,
+          spaceMode,
+          isDocumentRoot
+        )
       ) {
         return
       }
@@ -163,7 +210,8 @@ export function buildXmlTree(value) {
           child,
           `/${child.nodeName}[${sourceIndex}]`,
           0,
-          'default'
+          'default',
+          true
         )
       )
       return

@@ -120,6 +120,28 @@ describe('xml tree model', () => {
     expect(textValues).toEqual(['\n'])
   })
 
+  it.each([
+    ['newline-space', '\n ', '\n '],
+    ['newline-indent', '\n  ', '\n  '],
+    ['crlf', '\r\n ', '\n '],
+    ['newline-tab', '\n\t', '\n\t']
+  ])(
+    'keeps %s separators between inline elements as text',
+    (_name, separator, normalizedSeparator) => {
+      const result = buildXmlTree(
+        `<root><p><b>Hello</b>${separator}<i>world</i></p></root>`
+      )
+      const p = result.nodes[0].children.find(
+        (node) => node.label === 'p'
+      )
+      const textValues = p.children
+        .filter((node) => node.kind === 'text')
+        .map((node) => node.value)
+
+      expect(textValues).toEqual([normalizedSeparator])
+    }
+  )
+
   it('shows whitespace-only separators in preserve-space subtrees', () => {
     const result = buildXmlTree(
       '<root><code xml:space="preserve">  leading <b>and</b> trailing  </code></root>'

@@ -114,6 +114,35 @@ describe('xml logic', () => {
     )
   })
 
+  it.each([
+    ['newline-space', '\n '],
+    ['newline-indent', '\n  '],
+    ['crlf', '\r\n '],
+    ['newline-tab', '\n\t']
+  ])(
+    'preserves %s separators in mixed content when reparsed',
+    (_name, separator) => {
+      const input =
+        `<root><p><b>Hello</b>${separator}<i>world</i></p></root>`
+      const inputDocument = parseXmlDocument(input)
+      const expectedText =
+        inputDocument.document.querySelector('p').textContent
+      const result = formatXmlText(input)
+
+      expect(result.ok).toBe(true)
+      expect(validateXml(result.value).ok).toBe(true)
+
+      const outputDocument = parseXmlDocument(result.value)
+      expect(outputDocument.ok).toBe(true)
+      expect(outputDocument.document.querySelector('p').textContent).toBe(
+        expectedText
+      )
+      expect(result.value).toContain(
+        `<b>Hello</b>${separator.replace(/\r\n/g, '\n')}<i>world</i>`
+      )
+    }
+  )
+
   it('does not treat a bare newline separator as indentation', () => {
     const input = '<root><p><b>Hello</b>\n<i>world</i></p></root>'
     const result = formatXmlText(input)
@@ -241,6 +270,40 @@ describe('xml logic', () => {
     expect(parseXmlDocument(publicResult.value).ok).toBe(true)
     expect(validateXml(systemResult.value).ok).toBe(true)
     expect(validateXml(publicResult.value).ok).toBe(true)
+  })
+
+  it('ignores DOCTYPE-like text in comments and processing instructions', () => {
+    const commentInput =
+      '<!-- fake <!DOCTYPE root SYSTEM "wrong"> -->' +
+      '<!DOCTYPE root SYSTEM \'a"b\'><root/>'
+    const commentResult = formatXmlText(commentInput)
+
+    expect(commentResult).toEqual({
+      ok: true,
+      value: [
+        '<!-- fake <!DOCTYPE root SYSTEM "wrong"> -->',
+        '<!DOCTYPE root SYSTEM \'a"b\'>',
+        '<root/>'
+      ].join('\n')
+    })
+    expect(validateXml(commentResult.value).ok).toBe(true)
+    expect(parseXmlDocument(commentResult.value).ok).toBe(true)
+
+    const piInput =
+      '<?probe fake <!DOCTYPE root SYSTEM "wrong">?>' +
+      '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'><root/>'
+    const piResult = formatXmlText(piInput)
+
+    expect(piResult).toEqual({
+      ok: true,
+      value: [
+        '<?probe fake <!DOCTYPE root SYSTEM "wrong">?>',
+        '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'>',
+        '<root/>'
+      ].join('\n')
+    })
+    expect(validateXml(piResult.value).ok).toBe(true)
+    expect(parseXmlDocument(piResult.value).ok).toBe(true)
   })
 
   it('fails safely when a DOCTYPE identifier contains both quote types', () => {

@@ -197,31 +197,174 @@ function serializeProcessingInstruction(node) {
   return data ? `<?${target} ${data}?>` : `<?${target}?>`
 }
 
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function skipMarkupConstruct(source, start, terminator) {
+  const end = source.indexOf(terminator, start)
+  return end < 0 ? -1 : end + terminator.length
 }
 
-function doctypeIdentifiersFromSource(source, name) {
-  if (typeof source !== 'string' || !name) return null
+function readMarkupDeclaration(source, start) {
+  let quote = null
+  let subsetDepth = 0
 
-  const pattern = new RegExp(
-    `<!DOCTYPE\\s+${escapeRegExp(name)}\\s+(?:PUBLIC\\s+(['"])([\\s\\S]*?)\\1\\s+(['"])([\\s\\S]*?)\\3|SYSTEM\\s+(['"])([\\s\\S]*?)\\5)`,
-    'i'
-  )
-  const match = pattern.exec(source)
-  if (!match) return null
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index]
 
-  if (match[2] !== undefined) {
+    if (!quote && source.startsWith('<!--', index)) {
+      const end = skipMarkupConstruct(source, index + 4, '-->')
+      if (end < 0) return ''
+      index = end - 1
+      continue
+    }
+
+    if (!quote && source.startsWith('<?', index)) {
+      const end = skipMarkupConstruct(source, index + 2, '?>')
+      if (end < 0) return ''
+      index = end - 1
+      continue
+    }
+
+    if (!quote && source.startsWith('<![CDATA[', index)) {
+      const end = skipMarkupConstruct(source, index + 9, ']]>')
+      if (end < 0) return ''
+      index = end - 1
+      continue
+    }
+
+    if (quote) {
+      if (character === quote) quote = null
+      continue
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character
+    } else if (character === '[') {
+      subsetDepth += 1
+    } else if (character === ']' && subsetDepth > 0) {
+      subsetDepth -= 1
+    } else if (character === '>' && subsetDepth === 0) {
+      return source.slice(start, index + 1)
+    }
+  }
+
+  return ''
+}
+
+function doctypeDeclarationFromSource(source) {
+  if (typeof source !== 'string') return ''
+
+  let index = 0
+  while (index < source.length) {
+    const start = source.indexOf('<', index)
+    if (start < 0) return ''
+
+    if (source.startsWith('<!--', start)) {
+      index = skipMarkupConstruct(source, start + 4, '-->')
+      if (index < 0) return ''
+      continue
+    }
+
+    if (source.startsWith('<?', start)) {
+      index = skipMarkupConstruct(source, start + 2, '?>')
+      if (index < 0) return ''
+      continue
+    }
+
+    if (source.startsWith('<![CDATA[', start)) {
+      index = skipMarkupConstruct(source, start + 9, ']]>')
+      if (index < 0) return ''
+      continue
+    }
+
+    if (/^<!DOCTYPE(?:\s|$)/i.test(source.slice(start, start + 10))) {
+      return readMarkupDeclaration(source, start)
+    }
+
+    index = start + 1
+  }
+
+  return ''
+}
+
+function skipWhitespace(source, start) {
+  let index = start
+  while (index < source.length && /\s/.test(source[index])) index += 1
+  return index
+}
+
+function readDoctypeLiteral(source, start) {
+  const quote = source[start]
+  if (quote !== '"' && quote !== "'") return null
+
+  const end = source.indexOf(quote, start + 1)
+  if (end < 0) return null
+
+  return {
+    value: source.slice(start + 1, end),
+    end
+  }
+}
+
+function parseDoctypeIdentifiers(declaration, name) {
+  if (!declaration) return null
+
+  let index = skipWhitespace(declaration, '<!DOCTYPE'.length)
+  const nameStart = index
+  while (
+    index < declaration.length &&
+    !/\s/.test(declaration[index]) &&
+    declaration[index] !== '[' &&
+    declaration[index] !== '>'
+  ) {
+    index += 1
+  }
+
+  const declaredName = declaration.slice(nameStart, index)
+  if (name && declaredName && declaredName !== name) return null
+
+  index = skipWhitespace(declaration, index)
+  const publicKeyword = /^PUBLIC(?:\s|$)/i.test(declaration.slice(index, index + 7))
+
+  if (publicKeyword) {
+    index = skipWhitespace(declaration, index + 6)
+    const publicId = readDoctypeLiteral(declaration, index)
+    if (!publicId) return null
+
+    index = skipWhitespace(declaration, publicId.end + 1)
+    const systemId = readDoctypeLiteral(declaration, index)
+    if (!systemId) return null
+
     return {
-      publicId: match[2],
-      systemId: match[4] ?? ''
+      publicId: publicId.value,
+      systemId: systemId.value,
+      hasPublicId: true,
+      hasSystemId: true
+    }
+  }
+
+  if (/^SYSTEM(?:\s|$)/i.test(declaration.slice(index, index + 7))) {
+    index = skipWhitespace(declaration, index + 6)
+    const systemId = readDoctypeLiteral(declaration, index)
+    if (!systemId) return null
+
+    return {
+      publicId: '',
+      systemId: systemId.value,
+      hasPublicId: false,
+      hasSystemId: true
     }
   }
 
   return {
     publicId: '',
-    systemId: match[6] ?? ''
+    systemId: '',
+    hasPublicId: false,
+    hasSystemId: false
   }
+}
+
+function doctypeIdentifiersFromSource(source, name) {
+  const declaration = doctypeDeclarationFromSource(source)
+  return declaration ? parseDoctypeIdentifiers(declaration, name) : null
 }
 
 export function quoteDoctypeIdentifier(value) {
@@ -240,15 +383,19 @@ function serializeDoctype(node, source) {
   const fromSource = doctypeIdentifiersFromSource(source, name)
   const publicId = fromSource?.publicId ?? node.publicId ?? ''
   const systemId = fromSource?.systemId ?? node.systemId ?? ''
+  const hasPublicId =
+    fromSource?.hasPublicId ?? Boolean(node.publicId)
+  const hasSystemId =
+    fromSource?.hasSystemId ?? Boolean(node.systemId)
   let result = `<!DOCTYPE ${name}`
 
-  if (publicId) {
-    if (!systemId) {
+  if (hasPublicId) {
+    if (!hasSystemId) {
       throw new Error('DOCTYPE PUBLIC 标识符缺少 SYSTEM 标识符。')
     }
     result += ` PUBLIC ${quoteDoctypeIdentifier(publicId)}`
     result += ` ${quoteDoctypeIdentifier(systemId)}`
-  } else if (systemId) {
+  } else if (hasSystemId) {
     result += ` SYSTEM ${quoteDoctypeIdentifier(systemId)}`
   }
 
@@ -270,10 +417,30 @@ function isWhitespaceOnlyText(node) {
   )
 }
 
+function hasTextContentDescendant(node) {
+  return childNodes(node).some((child) => {
+    if (child.nodeType === CDATA_SECTION_NODE) return true
+    if (child.nodeType === TEXT_NODE) {
+      return String(child.nodeValue ?? '').trim().length > 0
+    }
+    return (
+      child.nodeType === ELEMENT_NODE &&
+      hasTextContentDescendant(child)
+    )
+  })
+}
+
 function isIndentationWhitespace(node) {
   return (
     isWhitespaceOnlyText(node) &&
     /(?:\r\n|\r|\n)[ \t]+$/.test(String(node.nodeValue ?? ''))
+  )
+}
+
+function isBetweenElementSiblings(children, index) {
+  return (
+    children[index - 1]?.nodeType === ELEMENT_NODE &&
+    children[index + 1]?.nodeType === ELEMENT_NODE
   )
 }
 
@@ -315,26 +482,44 @@ function resolveSpaceMode(element, inheritedSpace = 'default') {
   return inheritedSpace
 }
 
-function shouldIgnoreFormattingWhitespace(element, spaceMode) {
-  if (spaceMode === 'preserve') return false
-  return hasElementChild(element) && !hasNonWhitespaceText(element)
+function shouldIgnoreFormattingWhitespace(
+  element,
+  children,
+  index,
+  spaceMode,
+  isDocumentRoot
+) {
+  const child = children[index]
+  if (!isWhitespaceOnlyText(child) || spaceMode === 'preserve') {
+    return false
+  }
+  if (!hasElementChild(element) || hasNonWhitespaceText(element)) {
+    return false
+  }
+
+  const hasTextContent = hasTextContentDescendant(element)
+  if (!isDocumentRoot && hasTextContent) return false
+  if (hasTextContent && isBetweenElementSiblings(children, index)) {
+    return false
+  }
+
+  return isIndentationWhitespace(child) ||
+    isBoundaryNewline(children, index)
 }
 
-function presentationChildren(element, spaceMode) {
-  const ignoreFormattingWhitespace = shouldIgnoreFormattingWhitespace(
-    element,
-    spaceMode
-  )
-
+function presentationChildren(element, spaceMode, isDocumentRoot = false) {
   const children = childNodes(element)
 
-  return children.filter((child, index) => {
-    if (!ignoreFormattingWhitespace || !isWhitespaceOnlyText(child)) {
-      return true
-    }
-    if (isIndentationWhitespace(child)) return false
-    return !isBoundaryNewline(children, index)
-  })
+  return children.filter(
+    (_, index) =>
+      !shouldIgnoreFormattingWhitespace(
+        element,
+        children,
+        index,
+        spaceMode,
+        isDocumentRoot
+      )
+  )
 }
 
 function serializeInlineNode(node, inheritedSpace) {
@@ -358,7 +543,11 @@ function serializeElementInline(element, inheritedSpace) {
   const name = element.nodeName
   const attributes = serializeAttributes(element)
   const spaceMode = resolveSpaceMode(element, inheritedSpace)
-  const children = presentationChildren(element, spaceMode)
+  const children = presentationChildren(
+    element,
+    spaceMode,
+    false
+  )
 
   if (children.length === 0) return `<${name}${attributes}/>`
 
@@ -367,12 +556,21 @@ function serializeElementInline(element, inheritedSpace) {
     .join('')}</${name}>`
 }
 
-function serializeElement(element, depth, inheritedSpace = 'default') {
+function serializeElement(
+  element,
+  depth,
+  inheritedSpace = 'default',
+  isDocumentRoot = false
+) {
   const padding = indent(depth)
   const name = element.nodeName
   const attributes = serializeAttributes(element)
   const spaceMode = resolveSpaceMode(element, inheritedSpace)
-  const children = presentationChildren(element, spaceMode)
+  const children = presentationChildren(
+    element,
+    spaceMode,
+    isDocumentRoot
+  )
 
   if (children.length === 0) {
     return `${padding}<${name}${attributes}/>`
@@ -390,7 +588,7 @@ function serializeElement(element, depth, inheritedSpace = 'default') {
   const childLines = children.map((child) => {
     switch (child.nodeType) {
       case ELEMENT_NODE:
-        return serializeElement(child, depth + 1, spaceMode)
+        return serializeElement(child, depth + 1, spaceMode, false)
       case COMMENT_NODE:
         return `${indent(depth + 1)}${serializeComment(child)}`
       case CDATA_SECTION_NODE:
@@ -412,7 +610,7 @@ function serializeElement(element, depth, inheritedSpace = 'default') {
 function serializeTopLevelNode(node, source) {
   switch (node.nodeType) {
     case ELEMENT_NODE:
-      return serializeElement(node, 0, 'default')
+      return serializeElement(node, 0, 'default', true)
     case COMMENT_NODE:
       return serializeComment(node)
     case PROCESSING_INSTRUCTION_NODE:
