@@ -14,6 +14,24 @@ const TIMESTAMP_ACTION = {
   from: 'main'
 }
 
+const ORACLE_LABELS = [
+  'UTC+8 中国标准时间(本地时间)',
+  'UTC+8 中国标准时间(本地时间),日期',
+  '时间戳(秒)',
+  '时间戳(毫秒)',
+  '标准时间(UTC)',
+  'Excel 序列日期'
+]
+
+const ORACLE_VALUES = [
+  '2026-11-23 09:43:11',
+  '2026-11-23',
+  '1795398191',
+  '1795398191926',
+  '2026-11-23 01:43:11',
+  '46349.404999144'
+]
+
 async function enterTimestamp(page, action = TIMESTAMP_ACTION) {
   await page.evaluate((nextAction) => {
     window.__utoolsTest.enter(nextAction)
@@ -21,9 +39,9 @@ async function enterTimestamp(page, action = TIMESTAMP_ACTION) {
   await expect(page.locator('[data-tool="timestamp"]')).toBeVisible()
 }
 
-async function pressAltOne(page) {
+async function pressAltDigit(page, digit) {
   await page.keyboard.down('Alt')
-  await page.keyboard.press('Digit1')
+  await page.keyboard.press(`Digit${digit}`)
   await page.keyboard.up('Alt')
 }
 
@@ -35,7 +53,26 @@ async function expectNoHorizontalOverflow(page) {
   ).toBe(true)
 }
 
-test('renders the verified timestamp oracle and copies full values', async ({
+async function expectNoBoxOverlap(page, firstSelector, secondSelector) {
+  const overlap = await page.evaluate(
+    ([first, second]) => {
+      const firstBox = document.querySelector(first).getBoundingClientRect()
+      const secondBox =
+        document.querySelector(second).getBoundingClientRect()
+
+      return !(
+        firstBox.right <= secondBox.left ||
+        firstBox.left >= secondBox.right ||
+        firstBox.bottom <= secondBox.top ||
+        firstBox.top >= secondBox.bottom
+      )
+    },
+    [firstSelector, secondSelector]
+  )
+  expect(overlap).toBe(false)
+}
+
+test('renders the six-row oracle and copies Excel with Alt+6', async ({
   page
 }) => {
   const errors = collectPageErrors(page)
@@ -44,34 +81,46 @@ test('renders the verified timestamp oracle and copies full values', async ({
 
   await enterTimestamp(page)
   const input = page.locator('#timestamp-input')
-  await expect(input).toHaveValue('1795398191926')
-  await expect(page.locator('.output-row')).toHaveCount(5)
+  const select = page.locator('#timestamp-input-type')
 
+  await expect(input).toHaveValue('1795398191926')
+  await expect(select).toHaveValue('auto')
+  await expect(page.locator('#timestamp-parser-status')).toHaveText(
+    '自动识别：Unix 毫秒'
+  )
+  await expect
+    .poll(() =>
+      select.locator('option').evaluateAll((options) =>
+        options.map((option) => option.textContent)
+      )
+    )
+    .toEqual([
+      '自动识别',
+      'Unix 秒',
+      'Unix 毫秒',
+      'Excel 序列日期',
+      '日期时间文本'
+    ])
+  await expect(page.locator('.output-row')).toHaveCount(6)
   await expect
     .poll(() => page.locator('.output-row__label').allTextContents())
-    .toEqual([
-      'UTC+8 中国标准时间(本地时间)',
-      'UTC+8 中国标准时间(本地时间),日期',
-      '时间戳(秒)',
-      '时间戳(毫秒)',
-      '标准时间(UTC)'
-    ])
+    .toEqual(ORACLE_LABELS)
   await expect
     .poll(() => page.locator('.output-row__value').allTextContents())
-    .toEqual([
-      '2026-11-23 09:43:11',
-      '2026-11-23',
-      '1795398191',
-      '1795398191926',
-      '2026-11-23 01:43:11'
-    ])
+    .toEqual(ORACLE_VALUES)
 
   await input.fill('1795398191')
+  await expect(page.locator('#timestamp-parser-status')).toHaveText(
+    '自动识别：Unix 秒'
+  )
   await expect(page.locator('.output-row__value').nth(3)).toHaveText(
     '1795398191000'
   )
-  await input.fill('1795398191926')
+  await expect(page.locator('.output-row__value').nth(5)).toHaveText(
+    '46349.404988426'
+  )
 
+  await input.fill('1795398191926')
   await page.evaluate(() => window.__utoolsTest.resetCalls())
   await page
     .locator('.output-row')
@@ -83,25 +132,165 @@ test('renders the verified timestamp oracle and copies full values', async ({
   expect(calls.hideMainWindow).toHaveLength(1)
 
   await page.evaluate(() => window.__utoolsTest.resetCalls())
-  await pressAltOne(page)
+  await pressAltDigit(page, 6)
+  calls = await page.evaluate(() => window.__utoolsTest.getCalls())
+  expect(calls.copyText).toEqual(['46349.404999144'])
+  expect(calls.hideMainWindow).toHaveLength(1)
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await pressAltDigit(page, 1)
   calls = await page.evaluate(() => window.__utoolsTest.getCalls())
   expect(calls.copyText).toEqual(['2026-11-23 09:43:11'])
-  expect(calls.hideMainWindow).toHaveLength(1)
 
   await input.fill('   ')
   await expect(page.locator('[data-state="empty"]')).toBeVisible()
   await expect(page.locator('.output-row')).toHaveCount(0)
 
   await input.fill('not a date')
-  await expect(page.getByRole('alert')).toContainText('无法解析日期或时间戳')
+  await expect(page.locator('#timestamp-parser-status')).toHaveText(
+    '无法自动识别，请手动选择类型'
+  )
+  await expect(page.getByRole('alert')).toContainText(
+    '无法自动识别，请手动选择类型'
+  )
   await expect(page.locator('.output-row')).toHaveCount(0)
 
   await input.fill('1795398191926')
-  await expect(page.locator('.output-row')).toHaveCount(5)
+  await expect(page.locator('.output-row')).toHaveCount(6)
   expect(errors).toEqual([])
 })
 
-test('persists an extra timezone through out/enter and stays usable at 375px', async ({
+test('auto-detects Excel and text, then manual selection overrides auto', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await openApp(page)
+  await enterTimestamp(page)
+
+  const input = page.locator('#timestamp-input')
+  const select = page.locator('#timestamp-input-type')
+  const status = page.locator('#timestamp-parser-status')
+  const values = page.locator('.output-row__value')
+
+  await input.fill('45000')
+  await expect(status).toHaveText(
+    '自动识别：Excel 序列日期 · 也可解释为 Unix 秒'
+  )
+  await expect(page.locator('.output-row')).toHaveCount(6)
+  await expect(values.nth(0)).toHaveText('2023-03-15 00:00:00')
+  await expect(values.nth(3)).toHaveText('1678809600000')
+  await expect(values.nth(5)).toHaveText('45000')
+
+  await input.fill('45000.5')
+  await expect(status).toHaveText(
+    '自动识别：Excel 序列日期 · 也可解释为 Unix 秒'
+  )
+  await expect(values.nth(0)).toHaveText('2023-03-15 12:00:00')
+  await expect(values.nth(3)).toHaveText('1678852800000')
+  await expect(values.nth(5)).toHaveText('45000.5')
+
+  await input.fill('2026-11-23T09:43:11.926+08:00')
+  await expect(status).toHaveText('自动识别：日期时间文本')
+  await expect(values.nth(3)).toHaveText('1795398191926')
+  await expect(values.nth(5)).toHaveText('46349.404999144')
+
+  await input.fill('Mon, 23 Nov 2026 01:43:11 GMT')
+  await expect(status).toHaveText('自动识别：日期时间文本')
+  await expect(values.nth(0)).toHaveText('2026-11-23 09:43:11')
+  await expect(values.nth(4)).toHaveText('2026-11-23 01:43:11')
+
+  await input.fill('45000')
+  await select.selectOption('unix-seconds')
+  await expect(status).toHaveText(
+    '手动解析：Unix 秒 · 自动检测：Excel 序列日期'
+  )
+  await expect(values.nth(0)).toHaveText('1970-01-01 20:30:00')
+  await expect(values.nth(3)).toHaveText('45000000')
+  await expect(values.nth(5)).not.toHaveText('45000')
+
+  await input.fill('45001')
+  await expect(select).toHaveValue('unix-seconds')
+  await expect(status).toContainText('手动解析：Unix 秒')
+  await expect(values.nth(3)).toHaveText('45001000')
+
+  await select.selectOption('excel')
+  await input.fill('45000.5')
+  await expect(status).toHaveText(
+    '手动解析：Excel 序列日期 · 自动检测：Excel 序列日期'
+  )
+  await expect(values.nth(0)).toHaveText('2023-03-15 12:00:00')
+  await expect(values.nth(5)).toHaveText('45000.5')
+
+  await select.selectOption('datetime-text')
+  await input.fill('45000')
+  await expect(status).toContainText('手动解析：日期时间文本')
+  await expect(page.getByRole('alert')).toContainText(
+    '日期时间文本解析失败'
+  )
+  await expect(page.locator('.output-row')).toHaveCount(0)
+
+  expect(errors).toEqual([])
+})
+
+test('Excel errors are distinct and local-wall-clock values round-trip', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await openApp(page)
+  await enterTimestamp(page)
+
+  const input = page.locator('#timestamp-input')
+  const select = page.locator('#timestamp-input-type')
+  const status = page.locator('#timestamp-parser-status')
+  const values = page.locator('.output-row__value')
+
+  await select.selectOption('excel')
+  await input.fill('45000.5')
+  await expect(status).toHaveText(
+    '手动解析：Excel 序列日期 · 自动检测：Excel 序列日期'
+  )
+  await expect(values.nth(0)).toHaveText('2023-03-15 12:00:00')
+  await expect(values.nth(3)).toHaveText('1678852800000')
+  await expect(values.nth(5)).toHaveText('45000.5')
+
+  await input.fill('60')
+  await expect(page.getByRole('alert')).toContainText('虚构日期')
+  await expect(page.getByRole('alert')).toContainText('序列 60')
+  await expect(page.locator('.output-row')).toHaveCount(0)
+
+  await input.fill('-1')
+  await expect(page.getByRole('alert')).toContainText(
+    '不支持负数序列'
+  )
+  await expect(page.locator('.output-row')).toHaveCount(0)
+
+  await input.fill('2958466')
+  await expect(page.getByRole('alert')).toContainText(
+    '超出 1900 日期系统范围'
+  )
+  await expect(page.locator('.output-row')).toHaveCount(0)
+
+  await input.fill('0')
+  await expect(values.nth(0)).toHaveText('1899-12-31 00:00:00')
+  await expect(values.nth(5)).toHaveText('0')
+
+  await input.fill('45000.5')
+  const milliseconds = await values.nth(3).textContent()
+  expect(milliseconds).toBe('1678852800000')
+
+  await select.selectOption('unix-milliseconds')
+  await input.fill(milliseconds)
+  await expect(status).toHaveText(
+    '手动解析：Unix 毫秒 · 自动检测：Unix 毫秒'
+  )
+  await expect(values.nth(0)).toHaveText('2023-03-15 12:00:00')
+  await expect(values.nth(3)).toHaveText(milliseconds)
+  await expect(values.nth(5)).toHaveText('45000.5')
+
+  expect(errors).toEqual([])
+})
+
+test('extra timezone stays row 6, parser resets to Auto, and layouts do not overflow', async ({
   page
 }) => {
   const errors = collectPageErrors(page)
@@ -111,7 +300,12 @@ test('persists an extra timezone through out/enter and stays usable at 375px', a
   await page.getByRole('button', { name: /其他时区/ }).click()
   const extraTimezone = page.locator('[data-offset-key="+1"]')
   await extraTimezone.check()
-  await expect(page.locator('.output-row')).toHaveCount(6)
+
+  const labels = page.locator('.output-row__label')
+  const copyControls = page.locator('.output-row__copy')
+  await expect(page.locator('.output-row')).toHaveCount(7)
+  await expect(labels.nth(5)).toHaveText('UTC+1 欧洲中部时区')
+  await expect(labels.nth(6)).toHaveText('Excel 序列日期')
   await expect(
     page.locator('.output-row').filter({ hasText: 'UTC+1 欧洲中部时区' })
   ).toContainText('2026-11-23 02:43:11')
@@ -122,17 +316,36 @@ test('persists an extra timezone through out/enter and stays usable at 375px', a
     ['+1']
   ])
 
+  await page
+    .locator('#timestamp-input-type')
+    .selectOption('excel')
+  await page.locator('#timestamp-input').fill('45000.5')
+  await expect(page.locator('#timestamp-input-type')).toHaveValue('excel')
+
   await page.evaluate(() => window.__utoolsTest.out(false))
   await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'empty')
   await enterTimestamp(page)
-  await expect(page.locator('.output-row')).toHaveCount(6)
+  await expect(page.locator('#timestamp-input-type')).toHaveValue('auto')
+  await expect(page.locator('#timestamp-parser-status')).toHaveText(
+    '自动识别：Unix 毫秒'
+  )
+  await expect(page.locator('.output-row')).toHaveCount(7)
+  await expect(labels.nth(5)).toHaveText('UTC+1 欧洲中部时区')
+  await expect(labels.nth(6)).toHaveText('Excel 序列日期')
   await page.getByRole('button', { name: /其他时区/ }).click()
   await expect(page.locator('[data-offset-key="+1"]')).toBeChecked()
 
   await page.setViewportSize({ width: 375, height: 700 })
   await expectNoHorizontalOverflow(page)
   await expect(page.locator('#timestamp-input')).toBeVisible()
+  await expect(page.locator('#timestamp-input-type')).toBeVisible()
+  await expect(page.locator('#timestamp-parser-status')).toBeVisible()
   await expect(page.locator('.timezone-trigger')).toBeVisible()
+  await expectNoBoxOverlap(
+    page,
+    '.timestamp-parser',
+    '.timezone-panel'
+  )
   await expect
     .poll(() =>
       page
@@ -143,14 +356,16 @@ test('persists an extra timezone through out/enter and stays usable at 375px', a
 
   await page.getByRole('button', { name: '关闭其他时区面板' }).click()
   await page.locator('#timestamp-input').fill('1795398191926')
-  await expect(page.locator('.output-row')).toHaveCount(6)
+  await expect(page.locator('.output-row')).toHaveCount(7)
   await expect(page.locator('.timezone-trigger')).toBeEnabled()
 
   await page.setViewportSize({ width: 320, height: 600 })
   await expectNoHorizontalOverflow(page)
   await expect(page.locator('#timestamp-input')).toBeVisible()
-  await expect(page.locator('.output-row')).toHaveCount(6)
-  await expect(page.locator('.timezone-trigger')).toBeVisible()
+  await expect(page.locator('#timestamp-input-type')).toBeVisible()
+  await expect(page.locator('.output-row')).toHaveCount(7)
+  await expect(labels).toHaveCount(7)
+  await expect(copyControls).toHaveCount(7)
 
   const valueBoxes = await page.locator('.output-row__value').evaluateAll(
     (elements) =>
@@ -163,23 +378,19 @@ test('persists an extra timezone through out/enter and stays usable at 375px', a
         }
       })
   )
-  expect(valueBoxes).toHaveLength(6)
+  expect(valueBoxes).toHaveLength(7)
   for (const box of valueBoxes) {
     expect(box.width).toBeGreaterThanOrEqual(160)
     expect(box.height).toBeGreaterThan(0)
   }
 
-  const labels = page.locator('.output-row__label')
-  const copyControls = page.locator('.output-row__copy')
-  await expect(labels).toHaveCount(6)
-  await expect(copyControls).toHaveCount(6)
   const controlBoxes = await copyControls.evaluateAll((elements) =>
     elements.map((element) => {
       const box = element.getBoundingClientRect()
       return { width: box.width, height: box.height }
     })
   )
-  for (let index = 0; index < 6; index += 1) {
+  for (let index = 0; index < 7; index += 1) {
     await expect(labels.nth(index)).toBeVisible()
     await expect(copyControls.nth(index)).toBeVisible()
     await expect(copyControls.nth(index)).toBeEnabled()
@@ -187,25 +398,34 @@ test('persists an extra timezone through out/enter and stays usable at 375px', a
     expect(controlBoxes[index].height).toBeGreaterThan(0)
   }
 
+  await expectNoBoxOverlap(
+    page,
+    '.timestamp-parser',
+    '.timezone-trigger'
+  )
+  await page.getByRole('button', { name: /其他时区/ }).click()
+  await expectNoBoxOverlap(
+    page,
+    '.timestamp-parser',
+    '.timezone-panel'
+  )
   await page.evaluate(() =>
     window.scrollTo(0, document.documentElement.scrollHeight)
   )
-  const overlapWithTimezoneTrigger = await page.evaluate(() => {
-    const copy = document
-      .querySelector('.output-row:last-child .output-row__copy')
-      .getBoundingClientRect()
-    const trigger = document
-      .querySelector('.timezone-trigger')
-      .getBoundingClientRect()
-
-    return !(
-      copy.right <= trigger.left ||
-      copy.left >= trigger.right ||
-      copy.bottom <= trigger.top ||
-      copy.top >= trigger.bottom
-    )
-  })
-  expect(overlapWithTimezoneTrigger).toBe(false)
+  await expectNoBoxOverlap(
+    page,
+    '.output-row:last-child .output-row__copy',
+    '.timezone-panel'
+  )
+  await page.getByRole('button', { name: '关闭其他时区面板' }).click()
+  await page.evaluate(() =>
+    window.scrollTo(0, document.documentElement.scrollHeight)
+  )
+  await expectNoBoxOverlap(
+    page,
+    '.output-row:last-child .output-row__copy',
+    '.timezone-trigger'
+  )
 
   await page.evaluate(() => window.__utoolsTest.resetCalls())
   await page
@@ -216,6 +436,12 @@ test('persists an extra timezone through out/enter and stays usable at 375px', a
   const copyCalls = await page.evaluate(() => window.__utoolsTest.getCalls())
   expect(copyCalls.copyText).toEqual(['2026-11-23 02:43:11'])
   expect(copyCalls.hideMainWindow).toHaveLength(1)
+
+  await page.setViewportSize({ width: 1200, height: 800 })
+  await expectNoHorizontalOverflow(page)
+  await expect(page.locator('#timestamp-input-type')).toBeVisible()
+  await expect(page.locator('.timestamp-status')).toBeVisible()
+  await expect(page.locator('.timezone-trigger')).toBeVisible()
 
   expect(errors).toEqual([])
 })

@@ -9,6 +9,9 @@ import {
 } from '../../lib/preferences.js'
 import {
   EMPTY_TIMESTAMP_MESSAGE,
+  EXCEL_LOCAL_TIME_NOTE,
+  INPUT_TYPE_AUTO,
+  INPUT_TYPE_OPTIONS,
   buildTimestampRows,
   getInitialTimestampInput,
   sanitizeTimezoneOffsets
@@ -24,13 +27,16 @@ const props = defineProps({
 
 const inputElement = ref(null)
 const input = ref(getInitialTimestampInput(props.action))
+const inputType = ref(INPUT_TYPE_AUTO)
 const selectedOffsets = ref(
   sanitizeTimezoneOffsets(readTimezoneOffsets())
 )
 const panelOpen = ref(false)
 
 const result = computed(() =>
-  buildTimestampRows(input.value, selectedOffsets.value)
+  buildTimestampRows(input.value, selectedOffsets.value, {
+    inputType: inputType.value
+  })
 )
 const rows = computed(() => result.value.rows)
 
@@ -50,7 +56,11 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="timestamp-tool" data-tool="timestamp">
+  <section
+    class="timestamp-tool"
+    :class="{ 'timestamp-tool--panel-open': panelOpen }"
+    data-tool="timestamp"
+  >
     <label class="visually-hidden" for="timestamp-input">
       时间戳或日期时间
     </label>
@@ -66,8 +76,41 @@ onMounted(() => {
       spellcheck="false"
       placeholder="输入时间戳或日期时间"
       :aria-invalid="result.status === 'error' ? 'true' : 'false'"
+      aria-describedby="timestamp-parser-status timestamp-excel-hint"
       :data-status="result.status"
     />
+
+    <div class="timestamp-parser">
+      <div class="timestamp-parser__field">
+        <label class="timestamp-parser__label" for="timestamp-input-type">
+          输入类型
+        </label>
+        <select
+          id="timestamp-input-type"
+          v-model="inputType"
+          class="timestamp-select"
+          aria-describedby="timestamp-parser-status"
+        >
+          <option
+            v-for="option in INPUT_TYPE_OPTIONS"
+            :key="option.value"
+            :value="option.value"
+          >
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+      <p
+        id="timestamp-parser-status"
+        class="timestamp-status"
+        data-testid="timestamp-status"
+      >
+        {{ result.statusText }}
+      </p>
+      <p id="timestamp-excel-hint" class="timestamp-hint">
+        {{ EXCEL_LOCAL_TIME_NOTE }}
+      </p>
+    </div>
 
     <div class="timestamp-results" aria-live="polite">
       <EmptyState
@@ -79,6 +122,13 @@ onMounted(() => {
         :message="result.message"
       />
       <OutputList v-else :rows="rows" />
+      <p
+        v-if="result.excelNote"
+        class="timestamp-excel-note"
+        role="status"
+      >
+        {{ result.excelNote }}
+      </p>
     </div>
 
     <div class="timezone-control">
@@ -190,7 +240,76 @@ onMounted(() => {
   border-color: var(--danger-border);
 }
 
+.timestamp-parser {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.timestamp-parser__field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+.timestamp-parser__label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.timestamp-select {
+  max-width: 100%;
+  min-height: 36px;
+  padding: 7px 30px 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.timestamp-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.timestamp-status,
+.timestamp-hint,
+.timestamp-excel-note {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.timestamp-status {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.timestamp-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.timestamp-excel-note {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
 .timestamp-results {
+  display: grid;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -334,6 +453,16 @@ onMounted(() => {
     font-size: 18px;
   }
 
+  .timestamp-parser__field {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .timestamp-select {
+    width: 100%;
+  }
+
   :deep(.output-row) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -365,6 +494,11 @@ onMounted(() => {
   .timezone-panel {
     right: 14px;
     bottom: 64px;
+    max-height: min(50vh, 380px);
+  }
+
+  .timestamp-tool--panel-open {
+    padding-bottom: 420px;
   }
 }
 
