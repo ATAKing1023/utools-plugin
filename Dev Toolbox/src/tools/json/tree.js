@@ -6,12 +6,20 @@ function kindOf(value) {
   return 'text'
 }
 
+function valueTypeOf(value) {
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  if (typeof value === 'object') return 'object'
+  return typeof value
+}
+
 function createNode(value, label, id, depth) {
   const kind = kindOf(value)
   const node = {
     id,
     label,
     kind,
+    valueType: valueTypeOf(value),
     defaultOpen: depth === 0
   }
 

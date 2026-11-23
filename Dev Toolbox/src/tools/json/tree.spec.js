@@ -14,6 +14,7 @@ describe('json tree model', () => {
       id: '$',
       label: '$',
       kind: 'object',
+      valueType: 'object',
       defaultOpen: true
     })
     expect(root.children.map((node) => node.label)).toEqual([
@@ -23,12 +24,14 @@ describe('json tree model', () => {
     expect(root.children[0]).toMatchObject({
       id: '$["name"]',
       kind: 'text',
+      valueType: 'string',
       value: '"toolbox"',
       defaultOpen: false
     })
     expect(root.children[1]).toMatchObject({
       id: '$["nested"]',
       kind: 'object',
+      valueType: 'object',
       defaultOpen: false
     })
     expect(root.children[1].children[0].id).toBe('$["nested"]["enabled"]')
@@ -42,11 +45,13 @@ describe('json tree model', () => {
     expect(root.children.map((node) => node.id)).toEqual(['$[0]', '$[1]'])
     expect(root.children[0]).toMatchObject({
       kind: 'text',
+      valueType: 'string',
       value: '"alpha"'
     })
     expect(root.children[1].children[0]).toMatchObject({
       label: 'value',
       kind: 'text',
+      valueType: 'null',
       value: 'null'
     })
   })
@@ -56,12 +61,16 @@ describe('json tree model', () => {
       id: '$',
       label: '$',
       kind: 'text',
+      valueType: 'string',
       value: '"line\\nbreak"',
       defaultOpen: true
     })
     expect(buildJsonTree(false).value).toBe('false')
+    expect(buildJsonTree(false).valueType).toBe('boolean')
     expect(buildJsonTree(null).value).toBe('null')
+    expect(buildJsonTree(null).valueType).toBe('null')
     expect(buildJsonTree(-0).value).toBe('-0')
+    expect(buildJsonTree(-0).valueType).toBe('number')
   })
 
   it('keeps IDs unique for property names containing path punctuation', () => {

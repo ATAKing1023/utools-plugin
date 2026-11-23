@@ -6,6 +6,8 @@ import ModeTabs from '../../components/ModeTabs.vue'
 import OutputList from '../../components/OutputList.vue'
 import ToolFrame from '../../components/ToolFrame.vue'
 import TreeView from '../../components/TreeView.vue'
+import GraphView from './GraphView.vue'
+import { buildJsonGraph } from './graph.js'
 import {
   isJsonInputEmpty,
   parseJsonText
@@ -24,7 +26,8 @@ const props = defineProps({
 })
 
 const MODES = Object.freeze([
-  Object.freeze({ id: 'tree', label: '可视化' }),
+  Object.freeze({ id: 'tree', label: '结构树' }),
+  Object.freeze({ id: 'graph', label: '关系图' }),
   Object.freeze({ id: 'format', label: '格式化' })
 ])
 
@@ -34,7 +37,7 @@ function initialInput(action) {
 }
 
 const input = ref(initialInput(props.action))
-const mode = ref('tree')
+const mode = ref('graph')
 const actionCode = computed(() =>
   typeof props.action?.code === 'string' ? props.action.code : ''
 )
@@ -67,11 +70,18 @@ const analysis = computed(() => {
 
   return {
     state: 'ready',
+    value: parsed.value,
     tree: buildJsonTree(parsed.value),
     formatted
   }
 })
 
+const graphAnalysis = computed(() => {
+  if (mode.value !== 'graph' || analysis.value.state !== 'ready') {
+    return null
+  }
+  return buildJsonGraph(analysis.value.value, input.value)
+})
 const treeNodes = computed(() =>
   analysis.value.state === 'ready' ? [analysis.value.tree] : []
 )
@@ -116,6 +126,36 @@ const outputRows = computed(() =>
           aria-label="JSON 结构树"
           data-testid="json-tree"
         />
+        <GraphView
+          v-else-if="mode === 'graph' && graphAnalysis?.ok"
+          :graph="graphAnalysis"
+          aria-label="JSON 关系图"
+        />
+        <section
+          v-else-if="mode === 'graph'"
+          class="json-graph-limited"
+          data-state="limited"
+          data-testid="json-graph-limited"
+        >
+          <strong class="json-graph-limited__title">
+            关系图已达到限制
+          </strong>
+          <p
+            class="json-graph-limited__message"
+            role="status"
+            aria-live="polite"
+          >
+            当前 JSON 超出{{ graphAnalysis.limitLabel }}上限
+            {{ graphAnalysis.limitDisplay }}，关系图未生成。
+          </p>
+          <button
+            type="button"
+            class="json-graph-limited__action"
+            @click="mode = 'tree'"
+          >
+            切换到结构树
+          </button>
+        </section>
         <OutputList v-else :rows="outputRows" />
       </template>
     </div>
@@ -159,6 +199,44 @@ const outputRows = computed(() =>
 .json-field__input:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.json-graph-limited {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--danger-border);
+  border-radius: 9px;
+  background: var(--danger-surface);
+  color: var(--danger-text);
+}
+
+.json-graph-limited__title {
+  font-size: 14px;
+}
+
+.json-graph-limited__message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.json-graph-limited__action {
+  padding: 6px 10px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.json-graph-limited__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 @media (max-width: 520px) {
