@@ -7,6 +7,13 @@ export const DIFF_MARKERS = Object.freeze({
   changed: '~'
 })
 
+export function filterDiffRows(rows, onlyDifferences) {
+  if (!Array.isArray(rows)) return []
+  return onlyDifferences
+    ? rows.filter((row) => row.type !== 'context')
+    : rows.slice()
+}
+
 function createCounts() {
   return {
     added: 0,
