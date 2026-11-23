@@ -72,6 +72,81 @@ async function expectNoBoxOverlap(page, firstSelector, secondSelector) {
   expect(overlap).toBe(false)
 }
 
+async function measureOpenPanelGeometry(page) {
+  return page.evaluate(() => {
+    const panel = document.querySelector('#timezone-panel')
+    const panelRect = panel.getBoundingClientRect()
+    const controls = [...document.querySelectorAll('.output-row__copy')]
+    const handles = controls.map((control, index) => {
+      const rect = control.getBoundingClientRect()
+      const centerX = rect.left + rect.width / 2
+      const centerY = rect.top + rect.height / 2
+      const inViewport =
+        centerX >= 0 &&
+        centerX <= window.innerWidth &&
+        centerY >= 0 &&
+        centerY <= window.innerHeight
+      const hit = inViewport
+        ? document.elementFromPoint(centerX, centerY)
+        : null
+      const overlap = !(
+        rect.right <= panelRect.left ||
+        rect.left >= panelRect.right ||
+        rect.bottom <= panelRect.top ||
+        rect.top >= panelRect.bottom
+      )
+      const gap = Math.max(
+        panelRect.left - rect.right,
+        rect.left - panelRect.right,
+        panelRect.top - rect.bottom,
+        rect.top - panelRect.bottom
+      )
+
+      return {
+        index: index + 1,
+        inViewport,
+        covered: inViewport
+          ? !(hit === control || control.contains(hit))
+          : false,
+        overlap,
+        gap,
+        rect: {
+          left: rect.left,
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom
+        },
+        hit: hit
+          ? {
+              tagName: hit.tagName,
+              className: hit.className,
+              ariaLabel: hit.getAttribute?.('aria-label')
+            }
+          : null
+      }
+    })
+
+    return {
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight
+      },
+      panel: {
+        left: panelRect.left,
+        top: panelRect.top,
+        right: panelRect.right,
+        bottom: panelRect.bottom
+      },
+      handleCount: handles.length,
+      visibleHandleCount: handles.filter((handle) => handle.inViewport).length,
+      coveredCount: handles.filter((handle) => handle.covered).length,
+      overlapCount: handles.filter((handle) => handle.overlap).length,
+      minGap: Math.min(...handles.map((handle) => handle.gap)),
+      handles
+    }
+  })
+}
+
 test('renders the six-row oracle and copies Excel with Alt+6', async ({
   page
 }) => {
@@ -286,6 +361,72 @@ test('Excel errors are distinct and local-wall-clock values round-trip', async (
   await expect(values.nth(0)).toHaveText('2023-03-15 12:00:00')
   await expect(values.nth(3)).toHaveText(milliseconds)
   await expect(values.nth(5)).toHaveText('45000.5')
+
+  expect(errors).toEqual([])
+})
+
+test('open timezone panel leaves every copy handle clear at 1200, 375, and 320', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await openApp(page)
+  await enterTimestamp(page)
+
+  const trigger = page.locator('.timezone-trigger')
+  const panel = page.locator('#timezone-panel')
+  const closePanel = page.getByRole('button', {
+    name: '关闭其他时区面板'
+  })
+  const excelCopy = page
+    .locator('.output-row')
+    .filter({ hasText: 'Excel 序列日期' })
+    .locator('.output-row__copy')
+
+  for (const width of [1200, 375, 320]) {
+    await page.setViewportSize({ width, height: 800 })
+    await page.evaluate(() => window.scrollTo(0, 0))
+    if ((await trigger.getAttribute('aria-expanded')) === 'true') {
+      await closePanel.click()
+    }
+    await trigger.click()
+    await expect(panel).toBeVisible()
+
+    await trigger.focus()
+    await page.keyboard.press('Tab')
+    await expect(closePanel).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(page.locator('[data-offset-key="-11"]')).toBeFocused()
+
+    const overflow = await page.evaluate(() => ({
+      document:
+        document.documentElement.scrollWidth <= window.innerWidth,
+      body: document.body.scrollWidth <= window.innerWidth
+    }))
+    expect(overflow).toEqual({ document: true, body: true })
+
+    const geometry = await measureOpenPanelGeometry(page)
+    expect(geometry.handleCount).toBe(6)
+    expect(geometry.visibleHandleCount).toBeGreaterThan(0)
+    expect(geometry.overlapCount).toBe(0)
+    expect(geometry.coveredCount).toBe(0)
+    expect(geometry.minGap).toBeGreaterThan(1)
+    expect(geometry.minGap).toBeGreaterThanOrEqual(8)
+
+    await test.info().attach(`panel-copy-geometry-${width}x800`, {
+      contentType: 'application/json',
+      body: Buffer.from(JSON.stringify(geometry, null, 2))
+    })
+
+    if (width === 1200) {
+      expect(geometry.visibleHandleCount).toBe(6)
+      await page.evaluate(() => window.__utoolsTest.resetCalls())
+      await excelCopy.click()
+      const calls = await page.evaluate(() => window.__utoolsTest.getCalls())
+      expect(calls.copyText).toEqual(['46349.404999144'])
+      expect(calls.hideMainWindow).toHaveLength(1)
+      await expect(panel).toBeVisible()
+    }
+  }
 
   expect(errors).toEqual([])
 })

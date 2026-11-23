@@ -112,25 +112,6 @@ onMounted(() => {
       </p>
     </div>
 
-    <div class="timestamp-results" aria-live="polite">
-      <EmptyState
-        v-if="result.status === 'empty'"
-        :message="EMPTY_TIMESTAMP_MESSAGE"
-      />
-      <ErrorNotice
-        v-else-if="result.status === 'error'"
-        :message="result.message"
-      />
-      <OutputList v-else :rows="rows" />
-      <p
-        v-if="result.excelNote"
-        class="timestamp-excel-note"
-        role="status"
-      >
-        {{ result.excelNote }}
-      </p>
-    </div>
-
     <div class="timezone-control">
       <button
         type="button"
@@ -189,11 +170,35 @@ onMounted(() => {
         </label>
       </div>
     </div>
+
+    <div class="timestamp-results" aria-live="polite">
+      <EmptyState
+        v-if="result.status === 'empty'"
+        :message="EMPTY_TIMESTAMP_MESSAGE"
+      />
+      <ErrorNotice
+        v-else-if="result.status === 'error'"
+        :message="result.message"
+      />
+      <OutputList v-else :rows="rows" />
+      <p
+        v-if="result.excelNote"
+        class="timestamp-excel-note"
+        role="status"
+      >
+        {{ result.excelNote }}
+      </p>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .timestamp-tool {
+  --timezone-panel-width: 320px;
+  --timezone-panel-gap: 20px;
+  --timezone-panel-reserve: calc(
+    var(--timezone-panel-width) + var(--timezone-panel-gap)
+  );
   position: relative;
   display: flex;
   flex-direction: column;
@@ -364,7 +369,7 @@ onMounted(() => {
   z-index: 21;
   display: flex;
   flex-direction: column;
-  width: min(320px, calc(100vw - 28px));
+  width: min(var(--timezone-panel-width), calc(100vw - 28px));
   max-height: min(60vh, 480px);
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -447,6 +452,20 @@ onMounted(() => {
   font-size: 12px;
 }
 
+@media (min-width: 900px) {
+  .timestamp-tool--panel-open .timestamp-results {
+    padding-right: var(--timezone-panel-reserve);
+  }
+}
+
+@media (max-width: 899px) {
+  .timezone-panel {
+    position: static;
+    width: 100%;
+    max-height: min(50vh, 380px);
+  }
+}
+
 @media (max-width: 520px) {
   .timestamp-input {
     padding: 12px 13px;
@@ -492,13 +511,7 @@ onMounted(() => {
   }
 
   .timezone-panel {
-    right: 14px;
-    bottom: 64px;
     max-height: min(50vh, 380px);
-  }
-
-  .timestamp-tool--panel-open {
-    padding-bottom: 420px;
   }
 }
 
