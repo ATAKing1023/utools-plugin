@@ -27,16 +27,18 @@ const formattedSample = [
   '</root>'
 ].join('\n')
 
-async function enterXml(page) {
+async function enterXml(page, action = null) {
   await openApp(page)
-  await page.evaluate(() => {
-    window.__utoolsTest.enter({
-      code: 'xml',
-      type: 'text',
-      payload: 'XML 工具',
-      from: 'main'
-    })
-  })
+  await page.evaluate((enterAction) => {
+    window.__utoolsTest.enter(
+      enterAction || {
+        code: 'xml',
+        type: 'text',
+        payload: 'XML 工具',
+        from: 'main'
+      }
+    )
+  }, action)
   await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'xml')
 }
 
@@ -215,6 +217,79 @@ test('preserves newline-plus-indent mixed text after production formatting', asy
     'Hello\n world',
     'Hello\n  world'
   ])
+  expect(errors).toEqual([])
+})
+
+test('preserves empty-inline separators through production tree and formatting', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  const input =
+    '<root>' +
+    '<p><b></b>\n <i></i></p>' +
+    '<p><b></b>\n  <i></i></p>' +
+    '<p><b></b>\r\n <i></i></p>' +
+    '<p><b></b>\n\t<i></i></p>' +
+    '</root>'
+  const normalizedSeparators = ['\n ', '\n  ', '\n ', '\n\t']
+
+  await enterXml(page, {
+    code: 'xml',
+    type: 'over',
+    payload: input,
+    from: 'main'
+  })
+
+  const tree = page.locator('[data-testid="xml-tree"]')
+  const expandButtons = tree.getByRole('button', { name: '展开 p' })
+  const paragraphCount = await expandButtons.count()
+  expect(paragraphCount).toBe(4)
+
+  for (let index = 0; index < paragraphCount; index += 1) {
+    await tree.getByRole('button', { name: '展开 p' }).first().click()
+  }
+
+  const treeTextValues = await tree
+    .locator('[data-kind="text"] .tree-node__value')
+    .allTextContents()
+  expect(treeTextValues).toEqual(normalizedSeparators)
+
+  await page.getByRole('tab', { name: '格式化' }).click()
+
+  const formatted = await page.locator('.output-row__value').textContent()
+  expect(formatted).toContain('<p><b/>\n <i/></p>')
+  expect(formatted).toContain('<p><b/>\n  <i/></p>')
+  expect(formatted).toContain('<p><b/>\n\t<i/></p>')
+
+  const comparison = await page.evaluate(
+    ({ inputXml, formattedXml }) => {
+      const parse = (xml) => {
+        const document = new DOMParser().parseFromString(
+          xml,
+          'application/xml'
+        )
+        return {
+          error: document.querySelector('parsererror')?.textContent || null,
+          paragraphs: Array.from(document.querySelectorAll('p')).map(
+            (paragraph) => paragraph.textContent
+          )
+        }
+      }
+
+      return {
+        input: parse(inputXml),
+        output: parse(formattedXml)
+      }
+    },
+    { inputXml: input, formattedXml: formatted }
+  )
+
+  expect(comparison.input.error).toBeNull()
+  expect(comparison.output.error).toBeNull()
+  expect(comparison.output.paragraphs).toEqual(
+    comparison.input.paragraphs
+  )
+  expect(comparison.output.paragraphs).toEqual(normalizedSeparators)
   expect(errors).toEqual([])
 })
 

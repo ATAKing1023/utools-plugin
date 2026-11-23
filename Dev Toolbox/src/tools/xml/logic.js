@@ -410,68 +410,6 @@ function childNodes(node) {
   return Array.from(node.childNodes || [])
 }
 
-function isWhitespaceOnlyText(node) {
-  return (
-    node.nodeType === TEXT_NODE &&
-    String(node.nodeValue ?? '').trim().length === 0
-  )
-}
-
-function hasTextContentDescendant(node) {
-  return childNodes(node).some((child) => {
-    if (child.nodeType === CDATA_SECTION_NODE) return true
-    if (child.nodeType === TEXT_NODE) {
-      return String(child.nodeValue ?? '').trim().length > 0
-    }
-    return (
-      child.nodeType === ELEMENT_NODE &&
-      hasTextContentDescendant(child)
-    )
-  })
-}
-
-function isIndentationWhitespace(node) {
-  return (
-    isWhitespaceOnlyText(node) &&
-    /(?:\r\n|\r|\n)[ \t]+$/.test(String(node.nodeValue ?? ''))
-  )
-}
-
-function isBetweenElementSiblings(children, index) {
-  return (
-    children[index - 1]?.nodeType === ELEMENT_NODE &&
-    children[index + 1]?.nodeType === ELEMENT_NODE
-  )
-}
-
-function isBoundaryNewline(children, index) {
-  const value = String(children[index].nodeValue ?? '')
-  if (!/^(?:\r\n|\r|\n)$/.test(value)) return false
-
-  const hasElementBefore = children
-    .slice(0, index)
-    .some((child) => child.nodeType === ELEMENT_NODE)
-  const hasElementAfter = children
-    .slice(index + 1)
-    .some((child) => child.nodeType === ELEMENT_NODE)
-
-  return !hasElementBefore || !hasElementAfter
-}
-
-function hasElementChild(element) {
-  return childNodes(element).some(
-    (child) => child.nodeType === ELEMENT_NODE
-  )
-}
-
-function hasNonWhitespaceText(element) {
-  return childNodes(element).some(
-    (child) =>
-      child.nodeType === TEXT_NODE &&
-      String(child.nodeValue ?? '').trim().length > 0
-  )
-}
-
 function resolveSpaceMode(element, inheritedSpace = 'default') {
   const directValue = element.getAttribute?.('xml:space')
   const namespacedValue = element.getAttributeNS?.(XML_NAMESPACE, 'space')
@@ -480,46 +418,6 @@ function resolveSpaceMode(element, inheritedSpace = 'default') {
   if (value === 'preserve') return 'preserve'
   if (value === 'default') return 'default'
   return inheritedSpace
-}
-
-function shouldIgnoreFormattingWhitespace(
-  element,
-  children,
-  index,
-  spaceMode,
-  isDocumentRoot
-) {
-  const child = children[index]
-  if (!isWhitespaceOnlyText(child) || spaceMode === 'preserve') {
-    return false
-  }
-  if (!hasElementChild(element) || hasNonWhitespaceText(element)) {
-    return false
-  }
-
-  const hasTextContent = hasTextContentDescendant(element)
-  if (!isDocumentRoot && hasTextContent) return false
-  if (hasTextContent && isBetweenElementSiblings(children, index)) {
-    return false
-  }
-
-  return isIndentationWhitespace(child) ||
-    isBoundaryNewline(children, index)
-}
-
-function presentationChildren(element, spaceMode, isDocumentRoot = false) {
-  const children = childNodes(element)
-
-  return children.filter(
-    (_, index) =>
-      !shouldIgnoreFormattingWhitespace(
-        element,
-        children,
-        index,
-        spaceMode,
-        isDocumentRoot
-      )
-  )
 }
 
 function serializeInlineNode(node, inheritedSpace) {
@@ -543,11 +441,7 @@ function serializeElementInline(element, inheritedSpace) {
   const name = element.nodeName
   const attributes = serializeAttributes(element)
   const spaceMode = resolveSpaceMode(element, inheritedSpace)
-  const children = presentationChildren(
-    element,
-    spaceMode,
-    false
-  )
+  const children = childNodes(element)
 
   if (children.length === 0) return `<${name}${attributes}/>`
 
@@ -559,18 +453,13 @@ function serializeElementInline(element, inheritedSpace) {
 function serializeElement(
   element,
   depth,
-  inheritedSpace = 'default',
-  isDocumentRoot = false
+  inheritedSpace = 'default'
 ) {
   const padding = indent(depth)
   const name = element.nodeName
   const attributes = serializeAttributes(element)
   const spaceMode = resolveSpaceMode(element, inheritedSpace)
-  const children = presentationChildren(
-    element,
-    spaceMode,
-    isDocumentRoot
-  )
+  const children = childNodes(element)
 
   if (children.length === 0) {
     return `${padding}<${name}${attributes}/>`
@@ -588,7 +477,7 @@ function serializeElement(
   const childLines = children.map((child) => {
     switch (child.nodeType) {
       case ELEMENT_NODE:
-        return serializeElement(child, depth + 1, spaceMode, false)
+        return serializeElement(child, depth + 1, spaceMode)
       case COMMENT_NODE:
         return `${indent(depth + 1)}${serializeComment(child)}`
       case CDATA_SECTION_NODE:
@@ -610,7 +499,7 @@ function serializeElement(
 function serializeTopLevelNode(node, source) {
   switch (node.nodeType) {
     case ELEMENT_NODE:
-      return serializeElement(node, 0, 'default', true)
+      return serializeElement(node, 0, 'default')
     case COMMENT_NODE:
       return serializeComment(node)
     case PROCESSING_INSTRUCTION_NODE:

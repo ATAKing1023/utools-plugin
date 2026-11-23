@@ -29,7 +29,9 @@ describe('xml tree model', () => {
       kind: 'attribute',
       value: '1'
     })
-    expect(root.children[1]).toMatchObject({
+    expect(
+      root.children.find((node) => node.label === 'item')
+    ).toMatchObject({
       label: 'item',
       kind: 'element',
       defaultOpen: false
@@ -68,12 +70,16 @@ describe('xml tree model', () => {
     })
   })
 
-  it('ignores indentation only and keeps text-node whitespace intact', () => {
+  it('retains indentation and text-node whitespace without trimming', () => {
     const result = buildXmlTree('<root>\n  <item> value </item>\n</root>')
     const root = result.nodes[0]
     const item = root.children.find((node) => node.label === 'item')
 
-    expect(root.children.filter((node) => node.kind === 'text')).toEqual([])
+    expect(
+      root.children
+        .filter((node) => node.kind === 'text')
+        .map((node) => node.value)
+    ).toEqual(['\n  ', '\n'])
     expect(item.children).toHaveLength(1)
     expect(item.children[0].value).toBe(' value ')
   })
@@ -139,6 +145,37 @@ describe('xml tree model', () => {
         .map((node) => node.value)
 
       expect(textValues).toEqual([normalizedSeparator])
+    }
+  )
+
+  it.each([
+    ['newline-space', '\n ', '\n '],
+    ['newline-indent', '\n  ', '\n  '],
+    ['crlf', '\r\n ', '\n '],
+    ['newline-tab', '\n\t', '\n\t']
+  ])(
+    'keeps %s separators between empty inline elements as text',
+    (_name, separator, normalizedSeparator) => {
+      const paragraphResult = buildXmlTree(
+        `<root><p><b></b>${separator}<i></i></p></root>`
+      )
+      const paragraph = paragraphResult.nodes[0].children.find(
+        (node) => node.label === 'p'
+      )
+      const paragraphTextValues = paragraph.children
+        .filter((node) => node.kind === 'text')
+        .map((node) => node.value)
+
+      expect(paragraphTextValues).toEqual([normalizedSeparator])
+
+      const rootResult = buildXmlTree(
+        `<root><a/>${separator}<b/></root>`
+      )
+      const rootTextValues = rootResult.nodes[0].children
+        .filter((node) => node.kind === 'text')
+        .map((node) => node.value)
+
+      expect(rootTextValues).toEqual([normalizedSeparator])
     }
   )
 

@@ -143,6 +143,57 @@ describe('xml logic', () => {
     }
   )
 
+  it.each([
+    ['newline-space', '\n '],
+    ['newline-indent', '\n  '],
+    ['crlf', '\r\n '],
+    ['newline-tab', '\n\t']
+  ])(
+    'preserves %s separators between empty inline elements',
+    (_name, separator) => {
+      const input =
+        `<root><p><b></b>${separator}<i></i></p></root>`
+      const inputDocument = parseXmlDocument(input)
+      const inputParagraph =
+        inputDocument.document.querySelector('p').textContent
+      const result = formatXmlText(input)
+
+      expect(result.ok).toBe(true)
+      expect(validateXml(result.value).ok).toBe(true)
+
+      const outputDocument = parseXmlDocument(result.value)
+      expect(outputDocument.ok).toBe(true)
+      expect(outputDocument.document.querySelector('p').textContent).toBe(
+        inputParagraph
+      )
+      expect(result.value).toContain(
+        `<b/>${separator.replace(/\r\n/g, '\n')}<i/>`
+      )
+    }
+  )
+
+  it.each([
+    ['newline-space', '\n '],
+    ['newline-indent', '\n  '],
+    ['crlf', '\r\n '],
+    ['newline-tab', '\n\t']
+  ])(
+    'preserves %s separators between empty document children',
+    (_name, separator) => {
+      const input = `<root><a/>${separator}<b/></root>`
+      const inputDocument = parseXmlDocument(input)
+      const result = formatXmlText(input)
+
+      expect(result.ok).toBe(true)
+
+      const outputDocument = parseXmlDocument(result.value)
+      expect(outputDocument.ok).toBe(true)
+      expect(
+        outputDocument.document.documentElement.textContent
+      ).toBe(inputDocument.document.documentElement.textContent)
+    }
+  )
+
   it('does not treat a bare newline separator as indentation', () => {
     const input = '<root><p><b>Hello</b>\n<i>world</i></p></root>'
     const result = formatXmlText(input)
@@ -154,6 +205,20 @@ describe('xml logic', () => {
     expect(outputDocument.document.querySelector('p').textContent).toBe(
       'Hello\nworld'
     )
+  })
+
+  it('does not discard existing indentation-only text nodes', () => {
+    const input = '<root>\n  <a/>\n  <b/>\n</root>'
+    const inputDocument = parseXmlDocument(input)
+    const result = formatXmlText(input)
+
+    expect(result).toEqual({ ok: true, value: input })
+
+    const outputDocument = parseXmlDocument(result.value)
+    expect(outputDocument.ok).toBe(true)
+    expect(
+      outputDocument.document.documentElement.textContent
+    ).toBe(inputDocument.document.documentElement.textContent)
   })
 
   it('preserves whitespace throughout xml:space=preserve subtrees', () => {
