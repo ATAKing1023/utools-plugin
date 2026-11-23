@@ -6,6 +6,7 @@ import {
   isXmlInputEmpty,
   parseParserErrorMessage,
   parseXmlDocument,
+  quoteDoctypeIdentifier,
   validateXml
 } from './logic.js'
 
@@ -65,29 +66,125 @@ describe('xml logic', () => {
     expect(escapeXmlText('<&>')).toBe('&lt;&amp;&gt;')
   })
 
-  it('keeps text-only elements inline and normalizes empty elements', () => {
+  it('keeps text-only elements inline and preserves edge whitespace', () => {
     const result = formatXmlText(
       '<root><name> Alice </name><empty></empty></root>'
     )
 
     expect(result.ok).toBe(true)
     expect(result.value).toBe(
-      '<root>\n  <name>Alice</name>\n  <empty/>\n</root>'
+      '<root>\n  <name> Alice </name>\n  <empty/>\n</root>'
     )
   })
 
-  it('uses deterministic inline behavior for mixed content', () => {
-    const result = formatXmlText(
-      '<root><p>Hello <b>world</b>!</p></root>'
-    )
+  it('preserves whitespace separators in mixed content', () => {
+    const input = '<root><p>Hello <b>world</b> <i>again</i>!</p></root>'
+    const result = formatXmlText(input)
 
     expect(result).toEqual({
       ok: true,
-      value: '<root>\n  <p>Hello <b>world</b>!</p>\n</root>'
+      value: '<root>\n  <p>Hello <b>world</b> <i>again</i>!</p>\n</root>'
     })
 
-    const repeated = formatXmlText(result.value)
-    expect(repeated.value).toBe(result.value)
+    const inputDocument = parseXmlDocument(input)
+    const outputDocument = parseXmlDocument(result.value)
+    expect(inputDocument.ok).toBe(true)
+    expect(outputDocument.ok).toBe(true)
+    expect(outputDocument.document.querySelector('p').textContent).toBe(
+      inputDocument.document.querySelector('p').textContent
+    )
+    expect(outputDocument.document.querySelector('p').textContent).toBe(
+      'Hello world again!'
+    )
+  })
+
+  it('preserves whitespace-only separators between inline elements', () => {
+    const input = '<root><p><b>Hello</b> <i>world</i></p></root>'
+    const result = formatXmlText(input)
+
+    expect(result).toEqual({
+      ok: true,
+      value: '<root>\n  <p><b>Hello</b> <i>world</i></p>\n</root>'
+    })
+
+    const outputDocument = parseXmlDocument(result.value)
+    expect(outputDocument.ok).toBe(true)
+    expect(outputDocument.document.querySelector('p').textContent).toBe(
+      'Hello world'
+    )
+  })
+
+  it('does not treat a bare newline separator as indentation', () => {
+    const input = '<root><p><b>Hello</b>\n<i>world</i></p></root>'
+    const result = formatXmlText(input)
+
+    expect(result.ok).toBe(true)
+
+    const outputDocument = parseXmlDocument(result.value)
+    expect(outputDocument.ok).toBe(true)
+    expect(outputDocument.document.querySelector('p').textContent).toBe(
+      'Hello\nworld'
+    )
+  })
+
+  it('preserves whitespace throughout xml:space=preserve subtrees', () => {
+    const input = [
+      '<root>',
+      '<p xml:space="preserve">Hello <b>world</b> <i>again</i>!</p>',
+      '<code xml:space="preserve">  leading and trailing  </code>',
+      '</root>'
+    ].join('')
+    const result = formatXmlText(input)
+
+    expect(result).toEqual({
+      ok: true,
+      value: [
+        '<root>',
+        '  <p xml:space="preserve">Hello <b>world</b> <i>again</i>!</p>',
+        '  <code xml:space="preserve">  leading and trailing  </code>',
+        '</root>'
+      ].join('\n')
+    })
+
+    const outputDocument = parseXmlDocument(result.value)
+    expect(outputDocument.ok).toBe(true)
+    expect(outputDocument.document.querySelector('p').textContent).toBe(
+      'Hello world again!'
+    )
+    expect(outputDocument.document.querySelector('code').textContent).toBe(
+      '  leading and trailing  '
+    )
+  })
+
+  it('preserves inherited preserve-space text when reparsing', () => {
+    const input = [
+      '<root xml:space="preserve">\n',
+      '  <p>Hello <b>world</b> <i>again</i>!</p>\n',
+      '</root>'
+    ].join('')
+    const result = formatXmlText(input)
+
+    expect(result).toEqual({ ok: true, value: input })
+
+    const inputDocument = parseXmlDocument(input)
+    const outputDocument = parseXmlDocument(result.value)
+    expect(outputDocument.ok).toBe(true)
+    expect(outputDocument.document.documentElement.textContent).toBe(
+      inputDocument.document.documentElement.textContent
+    )
+
+    const separatorInput = '<root xml:space="preserve"> <a/> </root>'
+    const separatorResult = formatXmlText(separatorInput)
+    expect(separatorResult).toEqual({
+      ok: true,
+      value: separatorInput
+    })
+
+    const separatorDocument = parseXmlDocument(separatorResult.value)
+    expect(separatorDocument.ok).toBe(true)
+    expect(separatorDocument.document.documentElement.textContent).toBe(
+      '  '
+    )
   })
 
   it('preserves an XML declaration and ignores formatting whitespace', () => {
@@ -123,6 +220,33 @@ describe('xml logic', () => {
     expect(typeof parsed.error.message).toBe('string')
     expect(formatXmlText('<root><item></root>').ok).toBe(false)
     expect(validateXml('<root><item></root>').ok).toBe(false)
+  })
+
+  it('chooses safe delimiters for quote-bearing DOCTYPE identifiers', () => {
+    const systemInput = '<!DOCTYPE root SYSTEM \'a"b\'><root/>'
+    const publicInput = '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'><root/>'
+
+    const systemResult = formatXmlText(systemInput)
+    const publicResult = formatXmlText(publicInput)
+
+    expect(systemResult).toEqual({
+      ok: true,
+      value: '<!DOCTYPE root SYSTEM \'a"b\'>\n<root/>'
+    })
+    expect(publicResult).toEqual({
+      ok: true,
+      value: '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'>\n<root/>'
+    })
+    expect(parseXmlDocument(systemResult.value).ok).toBe(true)
+    expect(parseXmlDocument(publicResult.value).ok).toBe(true)
+    expect(validateXml(systemResult.value).ok).toBe(true)
+    expect(validateXml(publicResult.value).ok).toBe(true)
+  })
+
+  it('fails safely when a DOCTYPE identifier contains both quote types', () => {
+    expect(() => quoteDoctypeIdentifier('a"b\'c')).toThrow(
+      /无法安全序列化/
+    )
   })
 
   it('treats blank input as empty', () => {

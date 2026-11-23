@@ -6,6 +6,7 @@ const CDATA_SECTION_NODE = 4
 const PROCESSING_INSTRUCTION_NODE = 7
 const COMMENT_NODE = 8
 const DOCUMENT_TYPE_NODE = 10
+const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace'
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0
@@ -196,17 +197,59 @@ function serializeProcessingInstruction(node) {
   return data ? `<?${target} ${data}?>` : `<?${target}?>`
 }
 
-function serializeDoctype(node) {
-  let result = `<!DOCTYPE ${node.name || node.nodeName || 'root'}`
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
 
-  if (node.publicId) {
-    result += ` PUBLIC "${node.publicId}"`
-  } else if (node.systemId) {
-    result += ' SYSTEM'
+function doctypeIdentifiersFromSource(source, name) {
+  if (typeof source !== 'string' || !name) return null
+
+  const pattern = new RegExp(
+    `<!DOCTYPE\\s+${escapeRegExp(name)}\\s+(?:PUBLIC\\s+(['"])([\\s\\S]*?)\\1\\s+(['"])([\\s\\S]*?)\\3|SYSTEM\\s+(['"])([\\s\\S]*?)\\5)`,
+    'i'
+  )
+  const match = pattern.exec(source)
+  if (!match) return null
+
+  if (match[2] !== undefined) {
+    return {
+      publicId: match[2],
+      systemId: match[4] ?? ''
+    }
   }
 
-  if (node.systemId) {
-    result += ` "${node.systemId}"`
+  return {
+    publicId: '',
+    systemId: match[6] ?? ''
+  }
+}
+
+export function quoteDoctypeIdentifier(value) {
+  const identifier = String(value)
+
+  if (!identifier.includes('"')) return `"${identifier}"`
+  if (!identifier.includes("'")) return `'${identifier}'`
+
+  throw new Error(
+    'DOCTYPE 标识符同时包含单引号和双引号，无法安全序列化。'
+  )
+}
+
+function serializeDoctype(node, source) {
+  const name = node.name || node.nodeName || 'root'
+  const fromSource = doctypeIdentifiersFromSource(source, name)
+  const publicId = fromSource?.publicId ?? node.publicId ?? ''
+  const systemId = fromSource?.systemId ?? node.systemId ?? ''
+  let result = `<!DOCTYPE ${name}`
+
+  if (publicId) {
+    if (!systemId) {
+      throw new Error('DOCTYPE PUBLIC 标识符缺少 SYSTEM 标识符。')
+    }
+    result += ` PUBLIC ${quoteDoctypeIdentifier(publicId)}`
+    result += ` ${quoteDoctypeIdentifier(systemId)}`
+  } else if (systemId) {
+    result += ` SYSTEM ${quoteDoctypeIdentifier(systemId)}`
   }
 
   if (node.internalSubset) {
@@ -216,17 +259,88 @@ function serializeDoctype(node) {
   return `${result}>`
 }
 
-function meaningfulChildren(node) {
-  return Array.from(node.childNodes || []).filter((child) => {
-    if (child.nodeType !== TEXT_NODE) return true
-    return String(child.nodeValue ?? '').trim().length > 0
+function childNodes(node) {
+  return Array.from(node.childNodes || [])
+}
+
+function isWhitespaceOnlyText(node) {
+  return (
+    node.nodeType === TEXT_NODE &&
+    String(node.nodeValue ?? '').trim().length === 0
+  )
+}
+
+function isIndentationWhitespace(node) {
+  return (
+    isWhitespaceOnlyText(node) &&
+    /(?:\r\n|\r|\n)[ \t]+$/.test(String(node.nodeValue ?? ''))
+  )
+}
+
+function isBoundaryNewline(children, index) {
+  const value = String(children[index].nodeValue ?? '')
+  if (!/^(?:\r\n|\r|\n)$/.test(value)) return false
+
+  const hasElementBefore = children
+    .slice(0, index)
+    .some((child) => child.nodeType === ELEMENT_NODE)
+  const hasElementAfter = children
+    .slice(index + 1)
+    .some((child) => child.nodeType === ELEMENT_NODE)
+
+  return !hasElementBefore || !hasElementAfter
+}
+
+function hasElementChild(element) {
+  return childNodes(element).some(
+    (child) => child.nodeType === ELEMENT_NODE
+  )
+}
+
+function hasNonWhitespaceText(element) {
+  return childNodes(element).some(
+    (child) =>
+      child.nodeType === TEXT_NODE &&
+      String(child.nodeValue ?? '').trim().length > 0
+  )
+}
+
+function resolveSpaceMode(element, inheritedSpace = 'default') {
+  const directValue = element.getAttribute?.('xml:space')
+  const namespacedValue = element.getAttributeNS?.(XML_NAMESPACE, 'space')
+  const value = directValue ?? namespacedValue
+
+  if (value === 'preserve') return 'preserve'
+  if (value === 'default') return 'default'
+  return inheritedSpace
+}
+
+function shouldIgnoreFormattingWhitespace(element, spaceMode) {
+  if (spaceMode === 'preserve') return false
+  return hasElementChild(element) && !hasNonWhitespaceText(element)
+}
+
+function presentationChildren(element, spaceMode) {
+  const ignoreFormattingWhitespace = shouldIgnoreFormattingWhitespace(
+    element,
+    spaceMode
+  )
+
+  const children = childNodes(element)
+
+  return children.filter((child, index) => {
+    if (!ignoreFormattingWhitespace || !isWhitespaceOnlyText(child)) {
+      return true
+    }
+    if (isIndentationWhitespace(child)) return false
+    return !isBoundaryNewline(children, index)
   })
 }
 
-function serializeInlineNode(node) {
+function serializeInlineNode(node, inheritedSpace) {
   switch (node.nodeType) {
     case ELEMENT_NODE:
-      return serializeElementInline(node)
+      return serializeElementInline(node, inheritedSpace)
     case TEXT_NODE:
       return escapeXmlText(node.nodeValue ?? '')
     case CDATA_SECTION_NODE:
@@ -240,64 +354,43 @@ function serializeInlineNode(node) {
   }
 }
 
-function serializeElementInline(element) {
+function serializeElementInline(element, inheritedSpace) {
   const name = element.nodeName
   const attributes = serializeAttributes(element)
-  const children = meaningfulChildren(element)
+  const spaceMode = resolveSpaceMode(element, inheritedSpace)
+  const children = presentationChildren(element, spaceMode)
 
   if (children.length === 0) return `<${name}${attributes}/>`
 
   return `<${name}${attributes}>${children
-    .map(serializeInlineNode)
+    .map((child) => serializeInlineNode(child, spaceMode))
     .join('')}</${name}>`
 }
 
-function serializeTextOnlyElement(element, children) {
-  const content = children
-    .map((child) => {
-      if (child.nodeType === TEXT_NODE) {
-        return escapeXmlText(String(child.nodeValue ?? '').trim())
-      }
-      return serializeInlineNode(child)
-    })
-    .join('')
-
-  return `<${element.nodeName}${serializeAttributes(
-    element
-  )}>${content}</${element.nodeName}>`
-}
-
-function serializeMixedElement(element, children) {
-  return `<${element.nodeName}${serializeAttributes(element)}>${children
-    .map(serializeInlineNode)
-    .join('')}</${element.nodeName}>`
-}
-
-function serializeElement(element, depth) {
-  const children = meaningfulChildren(element)
+function serializeElement(element, depth, inheritedSpace = 'default') {
   const padding = indent(depth)
   const name = element.nodeName
   const attributes = serializeAttributes(element)
+  const spaceMode = resolveSpaceMode(element, inheritedSpace)
+  const children = presentationChildren(element, spaceMode)
 
   if (children.length === 0) {
     return `${padding}<${name}${attributes}/>`
   }
 
-  const hasText = children.some((child) => child.nodeType === TEXT_NODE)
-  const hasNonText = children.some((child) => child.nodeType !== TEXT_NODE)
-
-  if (hasText && hasNonText) {
-    return `${padding}${serializeMixedElement(element, children)}`
-  }
-
-  if (hasText) {
-    return `${padding}${serializeTextOnlyElement(element, children)}`
+  if (
+    spaceMode === 'preserve' ||
+    children.some((child) => child.nodeType === TEXT_NODE)
+  ) {
+    return `${padding}<${name}${attributes}>${children
+      .map((child) => serializeInlineNode(child, spaceMode))
+      .join('')}</${name}>`
   }
 
   const childLines = children.map((child) => {
     switch (child.nodeType) {
       case ELEMENT_NODE:
-        return serializeElement(child, depth + 1)
+        return serializeElement(child, depth + 1, spaceMode)
       case COMMENT_NODE:
         return `${indent(depth + 1)}${serializeComment(child)}`
       case CDATA_SECTION_NODE:
@@ -316,16 +409,16 @@ function serializeElement(element, depth) {
   ].join('\n')
 }
 
-function serializeTopLevelNode(node) {
+function serializeTopLevelNode(node, source) {
   switch (node.nodeType) {
     case ELEMENT_NODE:
-      return serializeElement(node, 0)
+      return serializeElement(node, 0, 'default')
     case COMMENT_NODE:
       return serializeComment(node)
     case PROCESSING_INSTRUCTION_NODE:
       return serializeProcessingInstruction(node)
     case DOCUMENT_TYPE_NODE:
-      return serializeDoctype(node)
+      return serializeDoctype(node, source)
     case CDATA_SECTION_NODE:
       return serializeCdata(node)
     default:
@@ -348,7 +441,7 @@ export function formatXmlText(value) {
 
   try {
     const lines = Array.from(parsed.document.childNodes)
-      .map(serializeTopLevelNode)
+      .map((node) => serializeTopLevelNode(node, value))
       .filter(Boolean)
     const declaration = extractXmlDeclaration(value)
 

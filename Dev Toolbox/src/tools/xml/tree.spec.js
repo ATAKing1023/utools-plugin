@@ -68,14 +68,79 @@ describe('xml tree model', () => {
     })
   })
 
-  it('ignores whitespace-only formatting text', () => {
+  it('ignores indentation only and keeps text-node whitespace intact', () => {
     const result = buildXmlTree('<root>\n  <item> value </item>\n</root>')
     const root = result.nodes[0]
     const item = root.children.find((node) => node.label === 'item')
 
     expect(root.children.filter((node) => node.kind === 'text')).toEqual([])
     expect(item.children).toHaveLength(1)
-    expect(item.children[0].value).toBe('value')
+    expect(item.children[0].value).toBe(' value ')
+  })
+
+  it('shows mixed-content separator text without trimming', () => {
+    const result = buildXmlTree(
+      '<root><p>Hello <b>world</b> <i>again</i>!</p></root>'
+    )
+    const p = result.nodes[0].children.find(
+      (node) => node.label === 'p'
+    )
+    const textValues = p.children
+      .filter((node) => node.kind === 'text')
+      .map((node) => node.value)
+
+    expect(textValues).toEqual(['Hello ', ' ', '!'])
+  })
+
+  it('keeps whitespace-only separators between inline elements', () => {
+    const result = buildXmlTree(
+      '<root><p><b>Hello</b> <i>world</i></p></root>'
+    )
+    const p = result.nodes[0].children.find(
+      (node) => node.label === 'p'
+    )
+    const textValues = p.children
+      .filter((node) => node.kind === 'text')
+      .map((node) => node.value)
+
+    expect(textValues).toEqual([' '])
+  })
+
+  it('keeps a bare newline separator between inline elements', () => {
+    const result = buildXmlTree(
+      '<root><p><b>Hello</b>\n<i>world</i></p></root>'
+    )
+    const p = result.nodes[0].children.find(
+      (node) => node.label === 'p'
+    )
+    const textValues = p.children
+      .filter((node) => node.kind === 'text')
+      .map((node) => node.value)
+
+    expect(textValues).toEqual(['\n'])
+  })
+
+  it('shows whitespace-only separators in preserve-space subtrees', () => {
+    const result = buildXmlTree(
+      '<root><code xml:space="preserve">  leading <b>and</b> trailing  </code></root>'
+    )
+    const code = result.nodes[0].children.find(
+      (node) => node.label === 'code'
+    )
+    const textValues = code.children
+      .filter((node) => node.kind === 'text')
+      .map((node) => node.value)
+
+    expect(textValues).toEqual(['  leading ', ' trailing  '])
+
+    const inherited = buildXmlTree(
+      '<root xml:space="preserve"> <a/> </root>'
+    )
+    const inheritedTextValues = inherited.nodes[0].children
+      .filter((node) => node.kind === 'text')
+      .map((node) => node.value)
+
+    expect(inheritedTextValues).toEqual([' ', ' '])
   })
 
   it('includes top-level comments alongside the root', () => {

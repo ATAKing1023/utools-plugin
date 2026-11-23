@@ -121,3 +121,77 @@ test('shows XML line and column errors and remains usable at 375px', async ({
 
   expect(errors).toEqual([])
 })
+
+test('preserves mixed and preserve-space text in the production formatter', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  await page.locator('#xml-input').fill(
+    '<root><p xml:space="preserve">Hello <b>world</b> <i>again</i>!</p><code xml:space="preserve">  leading and trailing  </code></root>'
+  )
+  await page.getByRole('tab', { name: '格式化' }).click()
+
+  const output = page.locator('.output-row__value')
+  const formatted = await output.textContent()
+  expect(formatted).toBe(
+    [
+      '<root>',
+      '  <p xml:space="preserve">Hello <b>world</b> <i>again</i>!</p>',
+      '  <code xml:space="preserve">  leading and trailing  </code>',
+      '</root>'
+    ].join('\n')
+  )
+
+  const reparsed = await page.evaluate((xml) => {
+    const document = new DOMParser().parseFromString(xml, 'application/xml')
+    return {
+      error: document.querySelector('parsererror')?.textContent || null,
+      paragraph: document.querySelector('p')?.textContent ?? '',
+      code: document.querySelector('code')?.textContent ?? ''
+    }
+  }, formatted)
+
+  expect(reparsed).toEqual({
+    error: null,
+    paragraph: 'Hello world again!',
+    code: '  leading and trailing  '
+  })
+  expect(errors).toEqual([])
+})
+
+test('keeps quote-bearing DOCTYPE output parsable and copyable', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  await page.locator('#xml-input').fill(
+    '<!DOCTYPE root SYSTEM \'a"b\'><root/>'
+  )
+  await page.getByRole('tab', { name: '格式化' }).click()
+
+  const output = page.locator('.output-row__value')
+  const formatted = await output.textContent()
+  expect(formatted).toBe('<!DOCTYPE root SYSTEM \'a"b\'>\n<root/>')
+
+  const reparsed = await page.evaluate((xml) => {
+    const document = new DOMParser().parseFromString(xml, 'application/xml')
+    return {
+      error: document.querySelector('parsererror')?.textContent || null,
+      systemId: document.doctype?.systemId ?? null
+    }
+  }, formatted)
+
+  expect(reparsed).toEqual({ error: null, systemId: 'a"b' })
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '复制 格式化结果' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toBe(formatted)
+  expect(errors).toEqual([])
+})
