@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { FEATURES, getFeature, isFeatureCode } from './features.js'
 
 const expectedFeatures = [
+  ['home', '开发工具箱', '全部工具统一入口', '开发工具箱'],
   ['timestamp', '时间戳转换', '日期时间格式转换', '时间戳转换'],
   ['uuid', 'UUID 生成', '生成 UUID', 'UUID 生成'],
   ['base64', 'Base64 编解码', 'Base64 编码与解码', 'Base64 编解码'],
@@ -16,7 +17,7 @@ const expectedFeatures = [
 const pluginJson = JSON.parse(readFileSync('public/plugin.json', 'utf8'))
 
 describe('frozen feature metadata', () => {
-  it('exports exactly the eight frozen features and no extras', () => {
+  it('exports exactly the nine frozen features and no extras', () => {
     expect(FEATURES.map((feature) => feature.code)).toEqual(
       expectedFeatures.map(([code]) => code)
     )

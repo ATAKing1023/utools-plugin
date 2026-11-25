@@ -56,6 +56,35 @@ async function graphTransform(page) {
     }))
 }
 
+async function emptyViewportPoint(page) {
+  return page
+    .locator('[data-testid="json-graph-viewport"]')
+    .evaluate((viewport) => {
+      const rect = viewport.getBoundingClientRect()
+      const candidates = [
+        [0.08, 0.25],
+        [0.12, 0.4],
+        [0.2, 0.2],
+        [0.08, 0.55]
+      ]
+
+      for (const [xRatio, yRatio] of candidates) {
+        const x = rect.left + rect.width * xRatio
+        const y = rect.top + rect.height * yRatio
+        const element = document.elementFromPoint(x, y)
+        if (
+          element &&
+          viewport.contains(element) &&
+          !element.closest('.graph-card')
+        ) {
+          return { x, y }
+        }
+      }
+
+      return null
+    })
+}
+
 function nestedContainers(depth) {
   let value = { leaf: 'end' }
   for (let index = 0; index < depth - 1; index += 1) {
@@ -130,7 +159,17 @@ async function expectClean(errors, requests) {
   expect(requests).toEqual([])
 }
 
-test('defaults to the graph and preserves three-mode state, tree, format, and copy behavior', async ({
+async function copiedText(page) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] ?? null)
+    )
+    .not.toBeNull()
+
+  return page.evaluate(() => window.__utoolsTest.getCalls().copyText[0])
+}
+
+test('defaults to the graph and preserves two-mode state, tree, actions, and copy behavior', async ({
   page
 }) => {
   const errors = collectPageErrors(page)
@@ -140,8 +179,7 @@ test('defaults to the graph and preserves three-mode state, tree, format, and co
   await expect(page.locator('[data-state="empty"]')).toBeVisible()
   expect(await page.getByRole('tab').allTextContents()).toEqual([
     '结构树',
-    '关系图',
-    '格式化'
+    '关系图'
   ])
   await expect(page.getByRole('tab', { name: '关系图' })).toHaveAttribute(
     'aria-selected',
@@ -149,7 +187,10 @@ test('defaults to the graph and preserves three-mode state, tree, format, and co
   )
 
   await page.locator('#json-input').fill(JSON.stringify(sample, null, 2))
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'graph')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'graph'
+  )
   await expect(page.getByRole('tab', { name: '关系图' })).toHaveAttribute(
     'aria-selected',
     'true'
@@ -163,12 +204,13 @@ test('defaults to the graph and preserves three-mode state, tree, format, and co
   await expect(errorNotice).toContainText(/位置：第 \d+ 行，第 \d+ 列/)
   await page.getByRole('tab', { name: '结构树' }).click()
   await expect(errorNotice).toBeVisible()
-  await page.getByRole('tab', { name: '格式化' }).click()
-  await expect(errorNotice).toBeVisible()
 
   await page.locator('#json-input').fill(inputValue)
   await page.getByRole('tab', { name: '关系图' }).click()
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'graph')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'graph'
+  )
 
   await page.getByRole('tab', { name: '结构树' }).click()
   const tree = page.locator('[data-testid="json-tree"]')
@@ -186,31 +228,34 @@ test('defaults to the graph and preserves three-mode state, tree, format, and co
   await expect(page.locator('.graph-card')).toHaveCount(5)
   await expect(page.locator('#json-input')).toHaveValue(inputValue)
 
-  await page.getByRole('tab', { name: '格式化' }).click()
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'format')
-  const output = page.locator('.output-row__value')
-  await expect(output).toBeVisible()
-  const formatted = await output.textContent()
-  expect(JSON.parse(formatted)).toEqual(sample)
-  expect(formatted.split('\n')[1].startsWith('  ')).toBe(true)
-
-  await page.evaluate(() => window.__utoolsTest.resetCalls())
-  await page.getByRole('button', { name: '复制 格式化结果' }).click()
+  await page.getByRole('button', { name: '压缩复制' }).click()
   await expect
     .poll(() =>
       page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
     )
-    .toBe(formatted)
+    .toBe(JSON.stringify(sample))
 
   await page.getByRole('tab', { name: '关系图' }).focus()
   await page.keyboard.press('ArrowRight')
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'format')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'tree'
+  )
   await page.keyboard.press('ArrowLeft')
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'graph')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'graph'
+  )
   await page.keyboard.press('Home')
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'tree')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'tree'
+  )
   await page.keyboard.press('End')
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'format')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'graph'
+  )
   await expect(page.locator('#json-input')).toHaveValue(inputValue)
 
   await expectClean(errors, requests)
@@ -324,8 +369,8 @@ test('renders deterministic graph structure and supports hover, focus, inspect, 
   await expect(page.locator('.graph-card')).toHaveCount(5)
 
   await page.getByRole('button', { name: '全部收起' }).click()
-  await expect(page.locator('.graph-card')).toHaveCount(3)
-  await expect(page.locator('.json-graph__edge')).toHaveCount(2)
+  await expect(page.locator('.graph-card')).toHaveCount(1)
+  await expect(page.locator('.json-graph__edge')).toHaveCount(0)
   await page.getByRole('button', { name: '全部展开' }).click()
   await expect(page.locator('.graph-card')).toHaveCount(5)
   await expect(page.locator('.json-graph__edge')).toHaveCount(4)
@@ -684,20 +729,55 @@ test('pans, zooms around the pointer, fits, and resets without page scrolling', 
   await expectClean(errors, requests)
 })
 
+test('does not auto-pan when pressing the graph background after panning', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  const requests = collectNetworkRequests(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill(JSON.stringify(sample, null, 2))
+  await expect(page.locator('.graph-card').first()).toBeVisible()
+
+  const viewport = page.locator('[data-testid="json-graph-viewport"]')
+  const box = await viewport.boundingBox()
+  expect(box).not.toBeNull()
+  const point = await emptyViewportPoint(page)
+  expect(point).not.toBeNull()
+  const initial = await graphTransform(page)
+
+  await page.mouse.move(point.x, point.y)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width - 24, point.y + 36, { steps: 8 })
+  await page.mouse.up()
+  const panned = await graphTransform(page)
+  expect(panned.x).toBeGreaterThan(initial.x + box.width * 0.5)
+
+  await page.mouse.move(point.x, point.y)
+  await page.mouse.down()
+  await waitForFrame(page)
+  expect(await graphTransform(page)).toEqual(panned)
+  await page.mouse.up()
+
+  await expect(
+    page.locator('[data-testid="json-graph-inspector"]')
+  ).toHaveCount(0)
+  await expectClean(errors, requests)
+})
+
 test('shows a graph-only limited state and keeps tree and format usable', async ({
   page
 }) => {
   const errors = collectPageErrors(page)
   const requests = collectNetworkRequests(page)
   await enterJson(page)
-  const overLimitValue = 'x'.repeat(4097)
+  const overLimitValue = 'x'.repeat(3 * 1024 * 1024)
   const overLimitInput = JSON.stringify(overLimitValue)
   await page.locator('#json-input').fill(overLimitInput)
 
   const limited = page.locator('[data-testid="json-graph-limited"]')
   await expect(limited).toBeVisible()
-  await expect(limited).toContainText('单个字面量字符数')
-  await expect(limited).toContainText('4,096 个字符')
+  await expect(limited).toContainText('UTF-8 输入大小')
+  await expect(limited).toContainText('2 MiB')
   await expect(page.getByRole('tab', { name: '关系图' })).toHaveAttribute(
     'aria-selected',
     'true'
@@ -705,28 +785,249 @@ test('shows a graph-only limited state and keeps tree and format usable', async 
   await expect(page.locator('.graph-card')).toHaveCount(0)
 
   await limited.getByRole('button', { name: '切换到结构树' }).click()
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'tree')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'tree'
+  )
   await expect(page.locator('[data-testid="json-tree"]')).toBeVisible()
   await expect(page.locator('[data-testid="json-tree"]')).toContainText(
     'xxxxxxxxxx'
   )
 
-  await page.getByRole('tab', { name: '格式化' }).click()
-  await expect(page.locator('.output-row__value')).toHaveText(overLimitInput)
   await page.evaluate(() => window.__utoolsTest.resetCalls())
-  await page.getByRole('button', { name: '复制 格式化结果' }).click()
+  await page.getByRole('button', { name: '压缩复制' }).click()
   await expect
     .poll(() =>
       page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
     )
-    .toBe(overLimitInput)
+    .toBe(JSON.stringify('x'.repeat(3 * 1024 * 1024)))
 
   await page.getByRole('tab', { name: '关系图' }).click()
   await expect(limited).toBeVisible()
-  await expect(page.locator('.json-tool')).toHaveAttribute('data-mode', 'graph')
+  await expect(page.locator('[data-tool="json"]')).toHaveAttribute(
+    'data-mode',
+    'graph'
+  )
   await expectNoPageOverflow(page)
 
   await expectClean(errors, requests)
+})
+
+test('offers editor actions under the input and copies derived formats', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+
+  const bar = page.locator('[data-testid="tool-action-bar"]')
+  await expect(bar).toBeVisible()
+  expect(
+    await page.locator('[data-action-id]').allTextContents()
+  ).toEqual(['格式化', '去注释', '压缩复制', '压缩转义复制', '转 XML 复制', '转 TS 复制'])
+
+  await page.locator('#json-input').fill('{"name":"Ada","tags":["a"]}')
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '压缩复制' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toBe('{"name":"Ada","tags":["a"]}')
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '转 XML 复制' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toContain('<name>Ada</name>')
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '转 TS 复制' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toContain('name: string')
+
+  await page.getByRole('button', { name: '格式化' }).click()
+  await expect(page.locator('#json-input')).toHaveValue(
+    JSON.stringify({ name: 'Ada', tags: ['a'] }, null, 2)
+  )
+
+  await page.locator('#json-input').fill('{\n  // comment\n  "a": 1\n}')
+  await page.getByRole('button', { name: '去注释' }).click()
+  await expect(page.locator('#json-input')).toHaveValue('{\n  "a": 1\n}')
+
+  expect(errors).toEqual([])
+})
+
+test('compresses without losing number literals and escapes the result', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+
+  const input = page.locator('#json-input')
+  await input.fill('{\n  "a": 1,\n  "b": 2.50,\n  "c": 1e3,\n  "text": "keep  space"\n}')
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '压缩复制' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toBe('{"a":1,"b":2.50,"c":1e3,"text":"keep  space"}')
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '压缩转义复制' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toBe('{\\"a\\":1,\\"b\\":2.50,\\"c\\":1e3,\\"text\\":\\"keep  space\\"}')
+
+  expect(errors).toEqual([])
+})
+
+test('copies a valid typescript interface with quoted keys', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+
+  await page
+    .locator('#json-input')
+    .fill('{"name":"Ada","age":36,"a-b":1,"tags":["x"],"nested":{"k":1}}')
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '转 TS 复制' }).click()
+
+  const copied = await copiedText(page)
+
+  expect(copied).toContain('export interface RootObject {')
+  expect(copied).toContain('name: string;')
+  expect(copied).toContain('age: number;')
+  expect(copied).toContain('"a-b": number;')
+  expect(copied).toContain('tags: string[];')
+  expect(copied).toContain('nested: {')
+
+  expect(errors).toEqual([])
+})
+
+test('auto-converts URL params, XML and YAML and evaluates JS filters', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+
+  const input = page.locator('#json-input')
+  await input.fill('name=Ada&role=admin')
+  await expect(
+    page.getByText('已识别为 URL Params，已自动转为 JSON')
+  ).toBeVisible()
+  await page.getByRole('button', { name: '格式化' }).click()
+  await expect(input).toHaveValue(
+    JSON.stringify({ name: 'Ada', role: 'admin' }, null, 2)
+  )
+
+  await input.fill('<root id="1"><name>Ada</name></root>')
+  await expect(page.getByText('已识别为 XML，已自动转为 JSON')).toBeVisible()
+  await page.getByRole('button', { name: '格式化' }).click()
+  await expect(input).toHaveValue(
+    JSON.stringify({ '@id': '1', name: 'Ada' }, null, 2)
+  )
+
+  await input.fill('name: Ada\nactive: true')
+  await expect(page.getByText('已识别为 YAML，已自动转为 JSON')).toBeVisible()
+  await page.getByRole('button', { name: '格式化' }).click()
+  await expect(input).toHaveValue(
+    JSON.stringify({ name: 'Ada', active: true }, null, 2)
+  )
+
+  await input.fill('{"rows":[{"val":1},{"val":2}]}')
+  await page.locator('#json-js-filter').fill('.rows.map(x=>x.val)')
+  await expect(page.locator('[data-testid="json-filter-output"]')).toHaveText(
+    '[\n  1,\n  2\n]'
+  )
+
+  expect(errors).toEqual([])
+})
+
+test('exports the relationship graph as a PNG image to the clipboard', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill('{"a":{"b":1},"c":[1,2]}')
+
+  const copied = await page.evaluate(async () => {
+    let received = null
+    window.utools.copyImage = (dataUrl) => {
+      received = dataUrl
+      return true
+    }
+    document.querySelector('[data-testid="graph-export-image"]').click()
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    return received
+  })
+
+  expect(copied).toBeTruthy()
+  expect(copied.startsWith('data:image/png;base64,')).toBe(true)
+  expect(copied.length).toBeGreaterThan(1000)
+
+  expect(errors).toEqual([])
+})
+
+test('keeps the json structure through the xml tool round trip', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+
+  const original = {
+    version: '3.0.0-SNAPSHOT',
+    exportTime: 1794906742098,
+    active: true,
+    description: '',
+    emptyList: [],
+    emptyObject: {},
+    dashboardList: [
+      {
+        id: 'dashboard-a',
+        config: {
+          componentList: [{ id: 'c1', chartsetList: [] }]
+        }
+      }
+    ]
+  }
+
+  await page.locator('#json-input').fill(JSON.stringify(original))
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '转 XML 复制' }).click()
+  const copiedXml = await copiedText(page)
+
+  expect(copiedXml).toContain('tb:type="number"')
+  expect(copiedXml).toContain('tb:array="1"')
+
+  await page.evaluate((xml) => {
+    window.__utoolsTest.enter({
+      code: 'xml',
+      type: 'text',
+      payload: xml,
+      from: 'main'
+    })
+  }, copiedXml)
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'xml')
+  await page.locator('#xml-input').fill(copiedXml)
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '转 JSON 复制' }).click()
+  const copiedJson = await copiedText(page)
+
+  expect(JSON.parse(copiedJson)).toEqual(original)
+  expect(errors).toEqual([])
 })
 
 test('reflows the inspector and avoids page overflow at 320, 375, and 1200px', async ({
@@ -768,7 +1069,7 @@ test('reflows the inspector and avoids page overflow at 320, 375, and 1200px', a
     await expect(viewport).toBeVisible()
     await expect(inspector).toBeVisible()
     const toolbarButtons = page.getByRole('toolbar').getByRole('button')
-    await expect(toolbarButtons).toHaveCount(6)
+    await expect(toolbarButtons).toHaveCount(7)
     for (const button of await toolbarButtons.all()) {
       await expect(button).toBeVisible()
     }

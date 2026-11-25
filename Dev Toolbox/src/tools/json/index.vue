@@ -1,18 +1,23 @@
 <script setup>
 import { computed, ref } from 'vue'
-import EmptyState from '../../components/EmptyState.vue'
-import ErrorNotice from '../../components/ErrorNotice.vue'
-import ModeTabs from '../../components/ModeTabs.vue'
-import OutputList from '../../components/OutputList.vue'
-import ToolFrame from '../../components/ToolFrame.vue'
-import TreeView from '../../components/TreeView.vue'
-import GraphView from './GraphView.vue'
+import StructuredToolShell from '../../components/StructuredToolShell.vue'
+import {
+  compressEscapedJsonText,
+  compressJsonText,
+  detectJsonSource,
+  evaluateJsFilter,
+  JSON_SOURCE_LABELS,
+  jsonToTypeScriptInterface,
+  jsonToXml,
+  stripJsonComments
+} from './actions.js'
 import { buildJsonGraph } from './graph.js'
 import {
   isJsonInputEmpty,
   parseJsonText
 } from './logic.js'
 import { buildJsonTree } from './tree.js'
+import { copyValue } from '../../lib/copy.js'
 
 const props = defineProps({
   action: {
@@ -27,9 +32,51 @@ const props = defineProps({
 
 const MODES = Object.freeze([
   Object.freeze({ id: 'tree', label: '结构树' }),
-  Object.freeze({ id: 'graph', label: '关系图' }),
-  Object.freeze({ id: 'format', label: '格式化' })
+  Object.freeze({ id: 'graph', label: '关系图' })
 ])
+
+const ACTIONS = Object.freeze([
+  Object.freeze({ id: 'format', label: '格式化', title: '重新格式化 JSON' }),
+  Object.freeze({
+    id: 'strip-comments',
+    label: '去注释',
+    title: '去除注释'
+  }),
+  Object.freeze({
+    id: 'compress',
+    label: '压缩复制',
+    title: '压缩 JSON 并复制'
+  }),
+  Object.freeze({
+    id: 'compress-escaped',
+    label: '压缩转义复制',
+    title: '压缩转义 JSON 并复制'
+  }),
+  Object.freeze({
+    id: 'to-xml',
+    label: '转 XML 复制',
+    title: 'JSON 转 XML 并复制'
+  }),
+  Object.freeze({
+    id: 'to-typescript',
+    label: '转 TS 复制',
+    title: 'JSON 转 TypeScript 并复制'
+  })
+])
+
+const actionBarActions = computed(() =>
+  ACTIONS.map((action) =>
+    action.id === 'strip-comments'
+      ? Object.freeze({
+          ...action,
+          disabled: isJsonInputEmpty(input.value)
+        })
+      : Object.freeze({
+          ...action,
+          disabled: analysis.value.state !== 'ready'
+        })
+  )
+)
 
 function initialInput(action) {
   if (!action || (action.type !== 'regex' && action.type !== 'over')) return ''
@@ -38,19 +85,24 @@ function initialInput(action) {
 
 const input = ref(initialInput(props.action))
 const mode = ref('graph')
-const actionCode = computed(() =>
-  typeof props.action?.code === 'string' ? props.action.code : ''
-)
+const actionStatus = ref('')
+const filterExpression = ref('')
 
 const analysis = computed(() => {
   if (isJsonInputEmpty(input.value)) return { state: 'empty' }
 
-  const parsed = parseJsonText(input.value)
-  if (!parsed.ok) return { state: 'error', error: parsed.error }
+  const detected = detectJsonSource(input.value)
+  if (!detected.ok) {
+    return {
+      state: 'error',
+      error: detected.error,
+      source: detected.source
+    }
+  }
 
   let formatted
   try {
-    formatted = JSON.stringify(parsed.value, null, 2)
+    formatted = JSON.stringify(detected.value, null, 2)
   } catch (error) {
     const message =
       error && typeof error.message === 'string'
@@ -70,11 +122,26 @@ const analysis = computed(() => {
 
   return {
     state: 'ready',
-    value: parsed.value,
-    tree: buildJsonTree(parsed.value),
-    formatted
+    value: detected.value,
+    tree: buildJsonTree(detected.value),
+    formatted,
+    source: detected.source
   }
 })
+
+const filterResult = computed(() => {
+  if (
+    filterExpression.value.trim() === '' ||
+    analysis.value.state !== 'ready'
+  ) {
+    return { ok: true, output: '' }
+  }
+  return evaluateJsFilter(filterExpression.value, analysis.value.value)
+})
+
+const sourceLabel = computed(
+  () => JSON_SOURCE_LABELS[analysis.value.source] ?? ''
+)
 
 const graphAnalysis = computed(() => {
   if (mode.value !== 'graph' || analysis.value.state !== 'ready') {
@@ -85,163 +152,191 @@ const graphAnalysis = computed(() => {
 const treeNodes = computed(() =>
   analysis.value.state === 'ready' ? [analysis.value.tree] : []
 )
-const outputRows = computed(() =>
-  analysis.value.state === 'ready'
-    ? [{ label: '格式化结果', value: analysis.value.formatted }]
-    : []
-)
+
+function setStatus(message) {
+  actionStatus.value = message
+  if (message) {
+    setTimeout(() => {
+      if (actionStatus.value === message) actionStatus.value = ''
+    }, 2500)
+  }
+}
+
+function handlePaste(event) {
+  const text = event.clipboardData?.getData('text')
+  if (!text) return
+
+  const detected = detectJsonSource(text)
+  if (!detected.ok || detected.source === 'json') return
+
+  event.preventDefault()
+  input.value = JSON.stringify(detected.value, null, 2)
+  setStatus(`已识别为${JSON_SOURCE_LABELS[detected.source]}并转为 JSON`)
+}
+
+function runAction(id) {
+  if (id === 'strip-comments') {
+    if (isJsonInputEmpty(input.value)) {
+      setStatus('请输入 JSON 后再使用该操作')
+      return
+    }
+
+    const stripped = stripJsonComments(input.value)
+    const parsed = parseJsonText(stripped)
+    if (!parsed.ok) {
+      setStatus('去除注释后不是有效的 JSON')
+      return
+    }
+    input.value = JSON.stringify(parsed.value, null, 2)
+    setStatus('已去除注释')
+    return
+  }
+
+  if (analysis.value.state !== 'ready') {
+    setStatus('请输入有效的 JSON 后再使用该操作')
+    return
+  }
+
+  const value = analysis.value.value
+
+  switch (id) {
+    case 'format':
+      input.value = analysis.value.formatted
+      setStatus('已格式化')
+      return
+    case 'compress':
+      copyValue(compressJsonText(input.value))
+      setStatus('已复制压缩 JSON')
+      return
+    case 'compress-escaped':
+      copyValue(compressEscapedJsonText(input.value))
+      setStatus('已复制压缩转义 JSON')
+      return
+    case 'to-xml':
+      copyValue(jsonToXml(value))
+      setStatus('已复制转换 XML')
+      return
+    case 'to-typescript':
+      copyValue(jsonToTypeScriptInterface(value))
+      setStatus('已复制转换 TypeScript')
+      return
+    default:
+      return
+  }
+}
 </script>
 
 <template>
-  <ToolFrame title="JSON 工具" description="可视化、格式化并复制 JSON 数据">
-    <div class="json-tool" :data-action-code="actionCode" :data-mode="mode">
-      <label class="json-field" for="json-input">
-        <span class="json-field__label">JSON 输入</span>
-        <textarea
-          id="json-input"
-          v-model="input"
-          class="json-field__input"
-          rows="8"
+  <StructuredToolShell
+    title="JSON 工具"
+    description="可视化、格式化并复制 JSON 数据"
+    tool-code="json"
+    input-id="json-input"
+    input-label="JSON 输入"
+    placeholder='粘贴 JSON，例如 {"name":"Dev Toolbox"}'
+    :input="input"
+    :state="analysis.state"
+    :error-message="analysis.error?.displayMessage ?? ''"
+    empty-message="请输入 JSON 数据以开始解析"
+    :mode="mode"
+    :modes="MODES"
+    :actions="actionBarActions"
+    :action-status="actionStatus"
+    :tree-nodes="treeNodes"
+    tree-label="JSON 结构树"
+    :graph="graphAnalysis"
+    graph-label="JSON 关系图"
+    graph-test-id="json-graph"
+    graph-inspector-label="JSON 检查器"
+    graph-value-label="完整 JSON 值"
+    @update:input="input = $event"
+    @update:mode="mode = $event"
+    @run-action="runAction"
+    @paste="handlePaste"
+  >
+    <template #extras>
+      <section class="json-filter" aria-label="JSON JS 过滤">
+        <label class="json-filter__label" for="json-js-filter">
+          JS 过滤
+        </label>
+        <input
+          id="json-js-filter"
+          v-model="filterExpression"
+          class="json-filter__input"
+          type="text"
+          autocomplete="off"
           spellcheck="false"
-          placeholder='粘贴 JSON，例如 {"name":"Dev Toolbox"}'
+          placeholder='.key.subkey、[0][1]、.map(x=>x.val)'
         />
-      </label>
-
-      <ModeTabs v-model="mode" :modes="MODES" />
-
-      <EmptyState
-        v-if="analysis.state === 'empty'"
-        message="请输入 JSON 数据以开始解析"
-      />
-
-      <ErrorNotice
-        v-else-if="analysis.state === 'error'"
-        :message="analysis.error.displayMessage"
-      />
-
-      <template v-else>
-        <TreeView
-          v-if="mode === 'tree'"
-          :nodes="treeNodes"
-          aria-label="JSON 结构树"
-          data-testid="json-tree"
-        />
-        <GraphView
-          v-else-if="mode === 'graph' && graphAnalysis?.ok"
-          :graph="graphAnalysis"
-          aria-label="JSON 关系图"
-        />
-        <section
-          v-else-if="mode === 'graph'"
-          class="json-graph-limited"
-          data-state="limited"
-          data-testid="json-graph-limited"
+        <p
+          v-if="analysis.state === 'ready' && analysis.source !== 'json'"
+          class="json-filter__source"
+          role="status"
+          aria-live="polite"
         >
-          <strong class="json-graph-limited__title">
-            关系图已达到限制
-          </strong>
-          <p
-            class="json-graph-limited__message"
-            role="status"
-            aria-live="polite"
-          >
-            当前 JSON 超出{{ graphAnalysis.limitLabel }}上限
-            {{ graphAnalysis.limitDisplay }}，关系图未生成。
-          </p>
-          <button
-            type="button"
-            class="json-graph-limited__action"
-            @click="mode = 'tree'"
-          >
-            切换到结构树
-          </button>
-        </section>
-        <OutputList v-else :rows="outputRows" />
-      </template>
-    </div>
-  </ToolFrame>
+          已识别为 {{ sourceLabel }}，已自动转为 JSON
+        </p>
+        <pre
+          v-if="filterResult.output"
+          class="json-filter__output"
+          data-testid="json-filter-output"
+        >{{ filterResult.output }}</pre>
+      </section>
+    </template>
+  </StructuredToolShell>
 </template>
 
 <style scoped>
-.json-tool,
-.json-field {
+.json-filter {
   display: grid;
-  gap: 12px;
+  gap: 6px;
   min-width: 0;
 }
 
-.json-field {
-  gap: 6px;
-}
-
-.json-field__label {
+.json-filter__label {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
 }
 
-.json-field__input {
+.json-filter__input {
   width: 100%;
   min-width: 0;
-  min-height: 172px;
-  padding: 10px 12px;
+  min-height: 32px;
+  padding: 5px 9px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 6px;
   outline: 0;
   background: var(--surface);
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.6;
-  resize: vertical;
+  font-size: 12px;
 }
 
-.json-field__input:focus-visible {
+.json-filter__input:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.json-graph-limited {
-  display: grid;
-  justify-items: start;
-  gap: 8px;
-  min-width: 0;
-  padding: 18px;
-  border: 1px solid var(--danger-border);
-  border-radius: 9px;
-  background: var(--danger-surface);
-  color: var(--danger-text);
-}
-
-.json-graph-limited__title {
-  font-size: 14px;
-}
-
-.json-graph-limited__message {
+.json-filter__source {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 11.5px;
 }
 
-.json-graph-limited__action {
-  padding: 6px 10px;
-  border: 1px solid currentColor;
+.json-filter__output {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: transparent;
-  color: inherit;
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
   font-size: 12px;
-  cursor: pointer;
-}
-
-.json-graph-limited__action:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-@media (max-width: 520px) {
-  .json-field__input {
-    min-height: 148px;
-  }
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 </style>

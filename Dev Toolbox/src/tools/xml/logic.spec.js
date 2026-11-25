@@ -7,7 +7,8 @@ import {
   parseParserErrorMessage,
   parseXmlDocument,
   quoteDoctypeIdentifier,
-  validateXml
+  validateXml,
+  xmlToJson
 } from './logic.js'
 
 describe('xml logic', () => {
@@ -452,5 +453,42 @@ describe('xml logic', () => {
     expect(isXmlInputEmpty('')).toBe(true)
     expect(isXmlInputEmpty(' \n\t')).toBe(true)
     expect(isXmlInputEmpty('<root/>')).toBe(false)
+  })
+
+  it('converts xml into a json object keyed by the root element', () => {
+    const result = xmlToJson('<root id="1"><name>Ada</name></root>')
+
+    expect(result.ok).toBe(true)
+    expect(result.value).toEqual({
+      '@id': '1',
+      name: 'Ada'
+    })
+  })
+
+  it('groups repeated sibling elements into arrays', () => {
+    const result = xmlToJson('<root><a>1</a><a>2</a><b>3</b></root>')
+
+    expect(result.ok).toBe(true)
+    expect(result.value).toEqual({
+      a: ['1', '2'],
+      b: '3'
+    })
+  })
+
+  it('keeps mixed text alongside child elements', () => {
+    const result = xmlToJson('<root>lead<a>1</a>tail</root>')
+
+    expect(result.ok).toBe(true)
+    expect(result.value).toEqual({
+      a: '1',
+      '#text': 'leadtail'
+    })
+  })
+
+  it('reports malformed xml instead of throwing', () => {
+    const result = xmlToJson('<root><item></root>')
+
+    expect(result.ok).toBe(false)
+    expect(typeof result.error.displayMessage).toBe('string')
   })
 })

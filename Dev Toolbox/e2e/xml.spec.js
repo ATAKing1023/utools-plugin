@@ -53,6 +53,16 @@ async function expectNoPageOverflow(page) {
   expect(metrics.bodyWidth).toBeLessThanOrEqual(metrics.viewportWidth)
 }
 
+async function copiedText(page) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] ?? null)
+    )
+    .not.toBeNull()
+
+  return page.evaluate(() => window.__utoolsTest.getCalls().copyText[0])
+}
+
 test('shows an open XML tree with attributes, comments and CDATA', async ({
   page
 }) => {
@@ -60,12 +70,13 @@ test('shows an open XML tree with attributes, comments and CDATA', async ({
   await enterXml(page)
 
   await expect(page.locator('[data-state="empty"]')).toBeVisible()
-  await expect(page.getByRole('tab', { name: '可视化' })).toHaveAttribute(
+  await expect(page.getByRole('tab', { name: '关系图' })).toHaveAttribute(
     'aria-selected',
     'true'
   )
 
   await page.locator('#xml-input').fill(sample)
+  await page.getByRole('tab', { name: '结构树' }).click()
 
   const tree = page.locator('[data-testid="xml-tree"]')
   await expect(tree).toBeVisible()
@@ -81,17 +92,41 @@ test('shows an open XML tree with attributes, comments and CDATA', async ({
   await expect(tree).toContainText('Alpha')
   await expect(tree).toContainText('@kind')
 
-  await page.getByRole('tab', { name: '格式化' }).click()
-  const output = page.locator('.output-row__value')
-  await expect(output).toHaveText(formattedSample)
+  await page.getByRole('button', { name: '格式化' }).click()
+  await expect(page.locator('#xml-input')).toHaveValue(formattedSample)
 
   await page.evaluate(() => window.__utoolsTest.resetCalls())
-  await page.getByRole('button', { name: '复制 格式化结果' }).click()
+  await page.getByRole('button', { name: '复制 XML' }).click()
   await expect
     .poll(() =>
       page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
     )
     .toBe(formattedSample)
+
+  expect(errors).toEqual([])
+})
+
+test('renders the XML relationship graph and collapses every card', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+  await page.locator('#xml-input').fill(sample)
+
+  const graph = page.locator('[data-testid="xml-graph"]')
+  await expect(graph).toBeVisible()
+  await expect(graph.locator('.graph-card')).toHaveCount(3)
+  await expect(graph.locator('.json-graph__edge')).toHaveCount(2)
+  await expect(
+    graph.getByRole('group', { name: '元素 卡片 /root', exact: true })
+  ).toBeVisible()
+
+  await page.getByRole('button', { name: '全部收起' }).click()
+  await expect(graph.locator('.graph-card')).toHaveCount(1)
+  await expect(graph.locator('.json-graph__edge')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '全部展开' }).click()
+  await expect(graph.locator('.graph-card')).toHaveCount(3)
 
   expect(errors).toEqual([])
 })
@@ -111,13 +146,15 @@ test('shows XML line and column errors and remains usable at 375px', async ({
   await page.setViewportSize({ width: 375, height: 700 })
   await expectNoPageOverflow(page)
   await expect(page.locator('#xml-input')).toBeVisible()
-  await expect(page.getByRole('tab', { name: '可视化' })).toBeVisible()
-  await expect(page.getByRole('tab', { name: '格式化' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '结构树' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '关系图' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '格式化' })).toBeVisible()
 
   await page.locator('#xml-input').fill('<root><mobile>yes</mobile></root>')
+  await page.getByRole('tab', { name: '结构树' }).click()
   await expect(page.locator('[data-testid="xml-tree"]')).toBeVisible()
-  await page.getByRole('tab', { name: '格式化' }).click()
-  await expect(page.locator('.output-row__value')).toHaveText(
+  await page.getByRole('button', { name: '格式化' }).click()
+  await expect(page.locator('#xml-input')).toHaveValue(
     '<root>\n  <mobile>yes</mobile>\n</root>'
   )
 
@@ -133,10 +170,9 @@ test('preserves mixed and preserve-space text in the production formatter', asyn
   await page.locator('#xml-input').fill(
     '<root><p xml:space="preserve">Hello <b>world</b> <i>again</i>!</p><code xml:space="preserve">  leading and trailing  </code></root>'
   )
-  await page.getByRole('tab', { name: '格式化' }).click()
+  await page.getByRole('button', { name: '格式化' }).click()
 
-  const output = page.locator('.output-row__value')
-  const formatted = await output.textContent()
+  const formatted = await page.locator('#xml-input').inputValue()
   expect(formatted).toBe(
     [
       '<root>',
@@ -174,9 +210,9 @@ test('preserves direct CDATA text through production formatting', async ({
     '<note><![CDATA[a]]><b>c</b></note></root>'
 
   await page.locator('#xml-input').fill(input)
-  await page.getByRole('tab', { name: '格式化' }).click()
+  await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('.output-row__value').textContent()
+  const formatted = await page.locator('#xml-input').inputValue()
   expect(formatted).toBe(
     [
       '<root>',
@@ -235,9 +271,9 @@ test('keeps the XML declaration before an xml-stylesheet PI', async ({
   ].join('\n')
 
   await page.locator('#xml-input').fill(input)
-  await page.getByRole('tab', { name: '格式化' }).click()
+  await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('.output-row__value').textContent()
+  const formatted = await page.locator('#xml-input').inputValue()
   const lines = formatted.split('\n')
   expect(lines[0]).toBe(declaration)
   expect(lines[1]).toBe(stylesheet)
@@ -280,9 +316,9 @@ test('preserves newline-plus-indent mixed text after production formatting', asy
   ].join('\n')
 
   await page.locator('#xml-input').fill(input)
-  await page.getByRole('tab', { name: '格式化' }).click()
+  await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('.output-row__value').textContent()
+  const formatted = await page.locator('#xml-input').inputValue()
   expect(formatted).toContain('<b>Hello</b>\n <i>world</i>')
   expect(formatted).toContain('<b>Hello</b>\n  <i>world</i>')
 
@@ -321,7 +357,7 @@ test('preserves newline-plus-indent mixed text after production formatting', asy
   expect(errors).toEqual([])
 })
 
-test('preserves empty-inline separators through production tree and formatting', async ({
+test('hides whitespace-only tree rows while formatting keeps separators', async ({
   page
 }) => {
   const errors = collectPageErrors(page)
@@ -340,6 +376,7 @@ test('preserves empty-inline separators through production tree and formatting',
     payload: input,
     from: 'main'
   })
+  await page.getByRole('tab', { name: '结构树' }).click()
 
   const tree = page.locator('[data-testid="xml-tree"]')
   const expandButtons = tree.getByRole('button', { name: '展开 p' })
@@ -350,14 +387,11 @@ test('preserves empty-inline separators through production tree and formatting',
     await tree.getByRole('button', { name: '展开 p' }).first().click()
   }
 
-  const treeTextValues = await tree
-    .locator('[data-kind="text"] .tree-node__value')
-    .allTextContents()
-  expect(treeTextValues).toEqual(normalizedSeparators)
+  expect(await tree.locator('[data-kind="text"]').count()).toBe(0)
 
-  await page.getByRole('tab', { name: '格式化' }).click()
+  await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('.output-row__value').textContent()
+  const formatted = await page.locator('#xml-input').inputValue()
   expect(formatted).toContain('<p><b/>\n <i/></p>')
   expect(formatted).toContain('<p><b/>\n  <i/></p>')
   expect(formatted).toContain('<p><b/>\n\t<i/></p>')
@@ -403,10 +437,9 @@ test('keeps quote-bearing DOCTYPE output parsable and copyable', async ({
   await page.locator('#xml-input').fill(
     '<!DOCTYPE root SYSTEM \'a"b\'><root/>'
   )
-  await page.getByRole('tab', { name: '格式化' }).click()
+  await page.getByRole('button', { name: '格式化' }).click()
 
-  const output = page.locator('.output-row__value')
-  const formatted = await output.textContent()
+  const formatted = await page.locator('#xml-input').inputValue()
   expect(formatted).toBe('<!DOCTYPE root SYSTEM \'a"b\'>\n<root/>')
 
   const reparsed = await page.evaluate((xml) => {
@@ -420,12 +453,50 @@ test('keeps quote-bearing DOCTYPE output parsable and copyable', async ({
   expect(reparsed).toEqual({ error: null, systemId: 'a"b' })
 
   await page.evaluate(() => window.__utoolsTest.resetCalls())
-  await page.getByRole('button', { name: '复制 格式化结果' }).click()
+  await page.getByRole('button', { name: '复制 XML' }).click()
   await expect
     .poll(() =>
       page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
     )
     .toBe(formatted)
+  expect(errors).toEqual([])
+})
+
+test('converts xml to json and typescript and copies both', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  const bar = page.locator('[data-testid="tool-action-bar"]')
+  await expect(bar).toBeVisible()
+  expect(
+    await page.locator('[data-action-id]').allTextContents()
+  ).toEqual(['格式化', '转 JSON 复制', '转 TS 复制', '复制 XML'])
+
+  await page
+    .locator('#xml-input')
+    .fill('<root id="1"><name>Ada</name><tag>a</tag><tag>b</tag></root>')
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '转 JSON 复制' }).click()
+
+  const copiedJson = await copiedText(page)
+
+  expect(JSON.parse(copiedJson)).toEqual({
+    '@id': '1',
+    name: 'Ada',
+    tag: ['a', 'b']
+  })
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '转 TS 复制' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toContain('export interface RootObject {')
+
   expect(errors).toEqual([])
 })
 
@@ -442,9 +513,9 @@ test('ignores DOCTYPE-like comment and PI text in production formatting', async 
   ].join('\n')
 
   await page.locator('#xml-input').fill(input)
-  await page.getByRole('tab', { name: '格式化' }).click()
+  await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('.output-row__value').textContent()
+  const formatted = await page.locator('#xml-input').inputValue()
   expect(formatted).toContain(
     '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'>'
   )
@@ -467,7 +538,7 @@ test('ignores DOCTYPE-like comment and PI text in production formatting', async 
   })
 
   await page.evaluate(() => window.__utoolsTest.resetCalls())
-  await page.getByRole('button', { name: '复制 格式化结果' }).click()
+  await page.getByRole('button', { name: '复制 XML' }).click()
   await expect
     .poll(() =>
       page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)

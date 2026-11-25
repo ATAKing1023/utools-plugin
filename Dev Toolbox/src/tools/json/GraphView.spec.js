@@ -298,8 +298,8 @@ describe('GraphView', () => {
       .find((button) => button.text() === '全部收起')
       .trigger('click')
     await flushPromises()
-    expect(wrapper.findAll('.graph-card')).toHaveLength(3)
-    expect(wrapper.findAll('.json-graph__edge')).toHaveLength(2)
+    expect(wrapper.findAll('.graph-card')).toHaveLength(1)
+    expect(wrapper.findAll('.json-graph__edge')).toHaveLength(0)
     expect(cardByPath(wrapper, '$["nested"]["deeper"]')).toBeUndefined()
     expect(cardByPath(wrapper, '$["items"][1]')).toBeUndefined()
     expect(cardByPath(wrapper, '$').text()).toContain('4 个属性')
@@ -434,7 +434,8 @@ describe('GraphView', () => {
       '缩小',
       '放大',
       '全部收起',
-      '全部展开'
+      '全部展开',
+      '导出图片'
     ])
     const live = wrapper.find('[role="status"]')
     expect(live.attributes('aria-live')).toBe('polite')

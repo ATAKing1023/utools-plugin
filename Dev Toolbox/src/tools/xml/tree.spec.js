@@ -99,7 +99,7 @@ describe('xml tree model', () => {
     ])
   })
 
-  it('retains indentation and text-node whitespace without trimming', () => {
+  it('drops indentation-only text rows while keeping text untrimmed', () => {
     const result = buildXmlTree('<root>\n  <item> value </item>\n</root>')
     const root = result.nodes[0]
     const item = root.children.find((node) => node.label === 'item')
@@ -108,12 +108,12 @@ describe('xml tree model', () => {
       root.children
         .filter((node) => node.kind === 'text')
         .map((node) => node.value)
-    ).toEqual(['\n  ', '\n'])
+    ).toEqual([])
     expect(item.children).toHaveLength(1)
     expect(item.children[0].value).toBe(' value ')
   })
 
-  it('shows mixed-content separator text without trimming', () => {
+  it('keeps meaningful mixed-content text without trimming', () => {
     const result = buildXmlTree(
       '<root><p>Hello <b>world</b> <i>again</i>!</p></root>'
     )
@@ -124,10 +124,10 @@ describe('xml tree model', () => {
       .filter((node) => node.kind === 'text')
       .map((node) => node.value)
 
-    expect(textValues).toEqual(['Hello ', ' ', '!'])
+    expect(textValues).toEqual(['Hello ', '!'])
   })
 
-  it('keeps whitespace-only separators between inline elements', () => {
+  it('drops whitespace-only separators between inline elements', () => {
     const result = buildXmlTree(
       '<root><p><b>Hello</b> <i>world</i></p></root>'
     )
@@ -138,10 +138,10 @@ describe('xml tree model', () => {
       .filter((node) => node.kind === 'text')
       .map((node) => node.value)
 
-    expect(textValues).toEqual([' '])
+    expect(textValues).toEqual([])
   })
 
-  it('keeps a bare newline separator between inline elements', () => {
+  it('drops a bare newline separator between inline elements', () => {
     const result = buildXmlTree(
       '<root><p><b>Hello</b>\n<i>world</i></p></root>'
     )
@@ -152,7 +152,7 @@ describe('xml tree model', () => {
       .filter((node) => node.kind === 'text')
       .map((node) => node.value)
 
-    expect(textValues).toEqual(['\n'])
+    expect(textValues).toEqual([])
   })
 
   it.each([
@@ -161,8 +161,8 @@ describe('xml tree model', () => {
     ['crlf', '\r\n ', '\n '],
     ['newline-tab', '\n\t', '\n\t']
   ])(
-    'keeps %s separators between inline elements as text',
-    (_name, separator, normalizedSeparator) => {
+    'drops %s separators between inline elements',
+    (_name, separator) => {
       const result = buildXmlTree(
         `<root><p><b>Hello</b>${separator}<i>world</i></p></root>`
       )
@@ -173,7 +173,7 @@ describe('xml tree model', () => {
         .filter((node) => node.kind === 'text')
         .map((node) => node.value)
 
-      expect(textValues).toEqual([normalizedSeparator])
+      expect(textValues).toEqual([])
     }
   )
 
@@ -183,8 +183,8 @@ describe('xml tree model', () => {
     ['crlf', '\r\n ', '\n '],
     ['newline-tab', '\n\t', '\n\t']
   ])(
-    'keeps %s separators between empty inline elements as text',
-    (_name, separator, normalizedSeparator) => {
+    'drops %s separators between empty inline elements',
+    (_name, separator) => {
       const paragraphResult = buildXmlTree(
         `<root><p><b></b>${separator}<i></i></p></root>`
       )
@@ -195,7 +195,7 @@ describe('xml tree model', () => {
         .filter((node) => node.kind === 'text')
         .map((node) => node.value)
 
-      expect(paragraphTextValues).toEqual([normalizedSeparator])
+      expect(paragraphTextValues).toEqual([])
 
       const rootResult = buildXmlTree(
         `<root><a/>${separator}<b/></root>`
@@ -204,7 +204,7 @@ describe('xml tree model', () => {
         .filter((node) => node.kind === 'text')
         .map((node) => node.value)
 
-      expect(rootTextValues).toEqual([normalizedSeparator])
+      expect(rootTextValues).toEqual([])
     }
   )
 

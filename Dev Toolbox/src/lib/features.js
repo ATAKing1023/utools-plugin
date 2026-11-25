@@ -1,5 +1,11 @@
 export const FEATURES = Object.freeze([
   Object.freeze({
+    code: 'home',
+    name: '开发工具箱',
+    description: '全部工具统一入口',
+    cmd: '开发工具箱'
+  }),
+  Object.freeze({
     code: 'timestamp',
     name: '时间戳转换',
     description: '日期时间格式转换',

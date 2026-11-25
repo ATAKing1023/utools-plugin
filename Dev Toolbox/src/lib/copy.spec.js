@@ -6,11 +6,6 @@ import {
   getShortcutLabel
 } from './copy.js'
 import {
-  TIMESTAMP_TIMEZONES_KEY,
-  readTimezoneOffsets,
-  writeTimezoneOffsets
-} from './preferences.js'
-import {
   copyText,
   dbGet,
   dbSet,
@@ -63,38 +58,5 @@ describe('safe uTools wrappers', () => {
     expect(dbSet('key', 'value')).toBe(false)
     expect(onPluginEnter(() => {})).toBe(false)
     expect(onPluginOut(() => {})).toBe(false)
-  })
-})
-
-describe('timestamp timezone preferences', () => {
-  it('round-trips a string array through the exact dbStorage key', () => {
-    const double = installUtoolsDouble()
-
-    expect(writeTimezoneOffsets(['+08:00', '-05:00'])).toBe(true)
-    expect(readTimezoneOffsets()).toEqual(['+08:00', '-05:00'])
-    expect(double.calls.dbSet).toEqual([
-      [TIMESTAMP_TIMEZONES_KEY, ['+08:00', '-05:00']]
-    ])
-    expect(double.calls.dbGet).toEqual([TIMESTAMP_TIMEZONES_KEY])
-    expect(TIMESTAMP_TIMEZONES_KEY).toBe('dev-toolbox.timestamp.timezones')
-  })
-
-  it('defaults missing, non-array, and corrupt values to an empty array', () => {
-    installUtoolsDouble()
-    expect(readTimezoneOffsets()).toEqual([])
-
-    installUtoolsDouble({
-      initialStorage: {
-        [TIMESTAMP_TIMEZONES_KEY]: 'not-an-array'
-      }
-    })
-    expect(readTimezoneOffsets()).toEqual([])
-
-    installUtoolsDouble({
-      initialStorage: {
-        [TIMESTAMP_TIMEZONES_KEY]: ['+08:00', 1, null, {}, '-05:00']
-      }
-    })
-    expect(readTimezoneOffsets()).toEqual(['+08:00', '-05:00'])
   })
 })

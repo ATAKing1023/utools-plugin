@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, shallowRef } from 'vue'
+import { computed, onMounted, provide, ref, shallowRef } from 'vue'
 import EmptyState from './components/EmptyState.vue'
 import { getFeature } from './lib/features.js'
 import { onPluginEnter, onPluginOut } from './lib/utools.js'
@@ -7,6 +7,7 @@ import { resolveTool } from './tools/registry.js'
 
 const routeCode = ref('')
 const enterAction = shallowRef(null)
+const fromHome = ref(false)
 
 const feature = computed(() => getFeature(routeCode.value))
 const selectedTool = computed(() => resolveTool(routeCode.value))
@@ -20,6 +21,17 @@ const emptyMessage = computed(() => {
   return `${feature.value.name} 尚未加载`
 })
 
+function navigateToTool(code) {
+  if (typeof code !== 'string') return
+  if (!getFeature(code) || !resolveTool(code)) return
+
+  enterAction.value = { code, type: 'none', payload: '', from: 'home' }
+  routeCode.value = code
+  fromHome.value = true
+}
+
+provide('navigateToTool', navigateToTool)
+
 onMounted(() => {
   onPluginEnter((action) => {
     enterAction.value = action && typeof action === 'object' ? action : null
@@ -27,17 +39,31 @@ onMounted(() => {
       enterAction.value && typeof enterAction.value.code === 'string'
         ? enterAction.value.code
         : ''
+    fromHome.value = false
   })
 
   onPluginOut(() => {
     routeCode.value = ''
     enterAction.value = null
+    fromHome.value = false
   })
 })
 </script>
 
 <template>
   <main class="app-shell" :data-route="routeCode || 'empty'">
+    <div
+      v-if="fromHome && selectedTool && routeCode !== 'home'"
+      class="app-shell__nav"
+    >
+      <button
+        type="button"
+        class="app-shell__back"
+        @click="navigateToTool('home')"
+      >
+        ← 全部工具
+      </button>
+    </div>
     <component
       :is="selectedTool"
       v-if="selectedTool"
@@ -48,3 +74,30 @@ onMounted(() => {
     <EmptyState v-else :message="emptyMessage" />
   </main>
 </template>
+
+<style scoped>
+.app-shell__nav {
+  margin-bottom: 8px;
+}
+
+.app-shell__back {
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+
+.app-shell__back:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.app-shell__back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+</style>

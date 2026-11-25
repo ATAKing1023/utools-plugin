@@ -1,15 +1,19 @@
 <script setup>
 import { computed, ref } from 'vue'
-import EmptyState from '../../components/EmptyState.vue'
-import ErrorNotice from '../../components/ErrorNotice.vue'
-import ModeTabs from '../../components/ModeTabs.vue'
-import OutputList from '../../components/OutputList.vue'
-import ToolFrame from '../../components/ToolFrame.vue'
-import TreeView from '../../components/TreeView.vue'
+import StructuredToolShell from '../../components/StructuredToolShell.vue'
+import { copyValue } from '../../lib/copy.js'
+import { jsonToTypeScriptInterface } from '../json/actions.js'
+import {
+  XML_GRAPH_COUNT_LABELS,
+  XML_GRAPH_EMPTY_LABELS,
+  XML_GRAPH_TYPE_LABELS,
+  buildXmlGraph
+} from './graph.js'
 import {
   formatXmlText,
   isXmlInputEmpty,
-  validateXml
+  validateXml,
+  xmlToJson
 } from './logic.js'
 import { buildXmlTree } from './tree.js'
 
@@ -25,9 +29,37 @@ const props = defineProps({
 })
 
 const MODES = Object.freeze([
-  Object.freeze({ id: 'tree', label: '可视化' }),
-  Object.freeze({ id: 'format', label: '格式化' })
+  Object.freeze({ id: 'tree', label: '结构树' }),
+  Object.freeze({ id: 'graph', label: '关系图' })
 ])
+
+const ACTIONS = Object.freeze([
+  Object.freeze({ id: 'format', label: '格式化', title: '重新格式化 XML' }),
+  Object.freeze({
+    id: 'to-json',
+    label: '转 JSON 复制',
+    title: 'XML 转 JSON 并复制'
+  }),
+  Object.freeze({
+    id: 'to-typescript',
+    label: '转 TS 复制',
+    title: 'JSON 转 TypeScript 并复制'
+  }),
+  Object.freeze({
+    id: 'to-xml',
+    label: '复制 XML',
+    title: '复制原始 XML'
+  })
+])
+
+const actionBarActions = computed(() =>
+  ACTIONS.map((action) =>
+    Object.freeze({
+      ...action,
+      disabled: analysis.value.state !== 'ready'
+    })
+  )
+)
 
 function initialInput(action) {
   if (!action || (action.type !== 'regex' && action.type !== 'over')) return ''
@@ -35,10 +67,8 @@ function initialInput(action) {
 }
 
 const input = ref(initialInput(props.action))
-const mode = ref('tree')
-const actionCode = computed(() =>
-  typeof props.action?.code === 'string' ? props.action.code : ''
-)
+const mode = ref('graph')
+const actionStatus = ref('')
 
 const analysis = computed(() => {
   if (isXmlInputEmpty(input.value)) return { state: 'empty' }
@@ -54,102 +84,96 @@ const analysis = computed(() => {
     return { state: 'error', error: formatResult.error }
   }
 
+  const jsonResult = xmlToJson(input.value)
+  if (!jsonResult.ok) {
+    return { state: 'error', error: jsonResult.error }
+  }
+
   return {
     state: 'ready',
     nodes: treeResult.nodes,
-    formatted: formatResult.value
+    formatted: formatResult.value,
+    value: jsonResult.value
   }
 })
 
-const outputRows = computed(() =>
-  analysis.value.state === 'ready'
-    ? [{ label: '格式化结果', value: analysis.value.formatted }]
-    : []
+const graphAnalysis = computed(() => {
+  if (mode.value !== 'graph' || analysis.value.state !== 'ready') {
+    return null
+  }
+  return buildXmlGraph(input.value)
+})
+
+const treeNodes = computed(() =>
+  analysis.value.state === 'ready' ? analysis.value.nodes : []
 )
+
+function setStatus(message) {
+  actionStatus.value = message
+  if (message) {
+    setTimeout(() => {
+      if (actionStatus.value === message) actionStatus.value = ''
+    }, 2500)
+  }
+}
+
+function runAction(id) {
+  if (analysis.value.state !== 'ready') {
+    setStatus('请输入有效的 XML 后再使用该操作')
+    return
+  }
+
+  switch (id) {
+    case 'format':
+      input.value = analysis.value.formatted
+      setStatus('已格式化')
+      return
+    case 'to-json':
+      copyValue(JSON.stringify(analysis.value.value, null, 2))
+      setStatus('已复制转换 JSON')
+      return
+    case 'to-typescript':
+      copyValue(jsonToTypeScriptInterface(analysis.value.value))
+      setStatus('已复制转换 TypeScript')
+      return
+    case 'to-xml':
+      copyValue(analysis.value.formatted)
+      setStatus('已复制 XML')
+      return
+    default:
+      return
+  }
+}
 </script>
 
 <template>
-  <ToolFrame title="XML 工具" description="可视化、格式化并复制 XML 文档">
-    <div class="xml-tool" :data-action-code="actionCode" :data-mode="mode">
-      <label class="xml-field" for="xml-input">
-        <span class="xml-field__label">XML 输入</span>
-        <textarea
-          id="xml-input"
-          v-model="input"
-          class="xml-field__input"
-          rows="8"
-          spellcheck="false"
-          placeholder='粘贴 XML，例如 <root><name>Dev Toolbox</name></root>'
-        />
-      </label>
-
-      <ModeTabs v-model="mode" :modes="MODES" />
-
-      <EmptyState
-        v-if="analysis.state === 'empty'"
-        message="请输入 XML 文档以开始解析"
-      />
-
-      <ErrorNotice
-        v-else-if="analysis.state === 'error'"
-        :message="analysis.error.displayMessage || analysis.error.message"
-      />
-
-      <template v-else>
-        <TreeView
-          v-if="mode === 'tree'"
-          :nodes="analysis.nodes"
-          aria-label="XML 结构树"
-          data-testid="xml-tree"
-        />
-        <OutputList v-else :rows="outputRows" />
-      </template>
-    </div>
-  </ToolFrame>
+  <StructuredToolShell
+    title="XML 工具"
+    description="可视化、格式化并复制 XML 文档"
+    tool-code="xml"
+    input-id="xml-input"
+    input-label="XML 输入"
+    placeholder='粘贴 XML，例如 <root><name>Dev Toolbox</name></root>'
+    :input="input"
+    :state="analysis.state"
+    :error-message="analysis.error?.displayMessage || analysis.error?.message || ''"
+    empty-message="请输入 XML 文档以开始解析"
+    :mode="mode"
+    :modes="MODES"
+    :actions="actionBarActions"
+    :action-status="actionStatus"
+    :tree-nodes="treeNodes"
+    tree-label="XML 结构树"
+    :graph="graphAnalysis"
+    graph-label="XML 关系图"
+    graph-test-id="xml-graph"
+    graph-inspector-label="XML 检查器"
+    graph-value-label="完整 XML 节点"
+    :graph-type-labels="XML_GRAPH_TYPE_LABELS"
+    :graph-count-labels="XML_GRAPH_COUNT_LABELS"
+    :graph-empty-labels="XML_GRAPH_EMPTY_LABELS"
+    @update:input="input = $event"
+    @update:mode="mode = $event"
+    @run-action="runAction"
+  />
 </template>
-
-<style scoped>
-.xml-tool,
-.xml-field {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-}
-
-.xml-field {
-  gap: 6px;
-}
-
-.xml-field__label {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.xml-field__input {
-  width: 100%;
-  min-width: 0;
-  min-height: 172px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  outline: 0;
-  background: var(--surface);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.6;
-  resize: vertical;
-}
-
-.xml-field__input:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-@media (max-width: 520px) {
-  .xml-field__input {
-    min-height: 148px;
-  }
-}
-</style>

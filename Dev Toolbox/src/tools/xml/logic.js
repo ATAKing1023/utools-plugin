@@ -8,6 +8,10 @@ const COMMENT_NODE = 8
 const DOCUMENT_TYPE_NODE = 10
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace'
 
+export const JSON_XML_NAMESPACE = 'https://dev-toolbox.local/json'
+export const JSON_XML_PREFIX = 'tb'
+const XMLNS_NAMESPACE = 'http://www.w3.org/2000/xmlns/'
+
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0
 }
@@ -147,6 +151,128 @@ export function parseXmlDocument(value) {
   }
 
   return { ok: true, document }
+}
+
+function jsonTypeMarker(node, name) {
+  return (
+    node.getAttributeNS?.(JSON_XML_NAMESPACE, name) ??
+    node.getAttribute?.(`${JSON_XML_PREFIX}:${name}`) ??
+    null
+  )
+}
+
+export function isJsonXmlMetadataAttribute(attribute) {
+  return (
+    attribute.namespaceURI === XMLNS_NAMESPACE ||
+    attribute.namespaceURI === JSON_XML_NAMESPACE ||
+    attribute.name === 'xmlns' ||
+    attribute.name?.startsWith('xmlns:') ||
+    attribute.name?.startsWith(`${JSON_XML_PREFIX}:`)
+  )
+}
+
+function xmlNodeToJson(node) {
+  const elementChildren = []
+  let text = ''
+
+  childNodes(node).forEach((child) => {
+    if (child.nodeType === ELEMENT_NODE) {
+      elementChildren.push(child)
+      return
+    }
+    if (child.nodeType === TEXT_NODE || child.nodeType === CDATA_SECTION_NODE) {
+      text += String(child.nodeValue ?? '')
+    }
+  })
+
+  const attributes = {}
+  Array.from(node.attributes || []).forEach((attribute) => {
+    if (isJsonXmlMetadataAttribute(attribute)) return
+    attributes[`@${attribute.name}`] = attribute.value
+  })
+  const trimmedText = text.trim()
+  const hasAttributes = Object.keys(attributes).length > 0
+  const explicitType = jsonTypeMarker(node, 'type')
+  const arrayMarker = jsonTypeMarker(node, 'array')
+
+  let converted
+
+  if (explicitType === 'null') {
+    converted = null
+  } else if (explicitType === 'number') {
+    converted = Number(trimmedText)
+  } else if (explicitType === 'boolean') {
+    converted = trimmedText === 'true'
+  } else if (explicitType === 'string') {
+    converted = trimmedText
+  } else if (
+    elementChildren.length === 0 &&
+    !hasAttributes &&
+    explicitType !== 'object'
+  ) {
+    converted = trimmedText
+  } else {
+    const result = { ...attributes }
+    elementChildren.forEach((child) => {
+      const name = child.nodeName
+      const childValue = xmlNodeToJson(child)
+      if (!Object.prototype.hasOwnProperty.call(result, name)) {
+        result[name] = childValue
+      } else if (Array.isArray(result[name])) {
+        result[name].push(childValue)
+      } else {
+        result[name] = [result[name], childValue]
+      }
+    })
+
+    if (trimmedText) result['#text'] = trimmedText
+    converted = result
+  }
+
+  if (arrayMarker === 'top') {
+    const items = elementChildren
+      .filter((child) => child.nodeName === 'item')
+      .map((child) => xmlNodeToJson(child))
+    if (items.length > 0) return items
+    return Array.isArray(converted) ? converted : []
+  }
+
+  if (arrayMarker) {
+    if (
+      elementChildren.length === 0 &&
+      !trimmedText &&
+      !hasAttributes &&
+      explicitType === null
+    ) {
+      return []
+    }
+    return [converted]
+  }
+
+  return converted
+}
+
+export function xmlToJson(value) {
+  const parsed = parseXmlDocument(value)
+  if (!parsed.ok) return parsed
+
+  const root = parsed.document.documentElement
+  if (!root) {
+    return {
+      ok: false,
+      error: createXmlError('XML 解析失败：未找到根元素', null, null)
+    }
+  }
+
+  const converted = xmlNodeToJson(root)
+  if (root.nodeName === 'root') {
+    return { ok: true, value: converted }
+  }
+
+  return {
+    ok: true,
+    value: { [root.nodeName]: converted }
+  }
 }
 
 export function escapeXmlText(value) {

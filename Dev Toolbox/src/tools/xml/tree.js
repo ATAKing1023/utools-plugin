@@ -1,9 +1,20 @@
-import { parseXmlDocument } from './logic.js'
+import { isJsonXmlMetadataAttribute, parseXmlDocument } from './logic.js'
 
 const ELEMENT_NODE = 1
 const TEXT_NODE = 3
 const CDATA_SECTION_NODE = 4
 const COMMENT_NODE = 8
+const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace'
+
+function resolveSpaceMode(element, inheritedSpace = 'default') {
+  const directValue = element.getAttribute?.('xml:space')
+  const namespacedValue = element.getAttributeNS?.(XML_NAMESPACE, 'space')
+  const value = directValue ?? namespacedValue
+
+  if (value === 'preserve') return 'preserve'
+  if (value === 'default') return 'default'
+  return inheritedSpace
+}
 
 function createAttributeNode(attribute, parentId) {
   return {
@@ -19,10 +30,11 @@ function childNodes(node) {
   return Array.from(node.childNodes || [])
 }
 
-function createElementNode(element, id, depth) {
-  const children = Array.from(element.attributes || []).map((attribute) =>
-    createAttributeNode(attribute, id)
-  )
+function createElementNode(element, id, depth, inheritedSpace = 'default') {
+  const spaceMode = resolveSpaceMode(element, inheritedSpace)
+  const children = Array.from(element.attributes || [])
+    .filter((attribute) => !isJsonXmlMetadataAttribute(attribute))
+    .map((attribute) => createAttributeNode(attribute, id))
   const elementChildren = childNodes(element)
 
   elementChildren.forEach((child, sourceIndex) => {
@@ -31,7 +43,8 @@ function createElementNode(element, id, depth) {
         createElementNode(
           child,
           `${id}/${child.nodeName}[${sourceIndex}]`,
-          depth + 1
+          depth + 1,
+          spaceMode
         )
       )
       return
@@ -62,6 +75,7 @@ function createElementNode(element, id, depth) {
     if (child.nodeType === TEXT_NODE) {
       const value = String(child.nodeValue ?? '')
       if (!value) return
+      if (!value.trim() && spaceMode !== 'preserve') return
       children.push({
         id: `${id}/text[${sourceIndex}]`,
         label: '#text',
@@ -93,7 +107,8 @@ export function buildXmlTree(value) {
         createElementNode(
           child,
           `/${child.nodeName}[${sourceIndex}]`,
-          0
+          0,
+          'default'
         )
       )
       return

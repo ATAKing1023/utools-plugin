@@ -20,6 +20,8 @@ import {
   revealGraphRectTransform,
   truncateGraphText
 } from './graph.js'
+import { buildGraphPng } from './export.js'
+import { copyImage } from '../../lib/utools.js'
 
 const props = defineProps({
   graph: {
@@ -29,8 +31,44 @@ const props = defineProps({
   ariaLabel: {
     type: String,
     default: 'JSON 关系图'
+  },
+  testId: {
+    type: String,
+    default: 'json-graph'
+  },
+  inspectorLabel: {
+    type: String,
+    default: 'JSON 检查器'
+  },
+  valueLabel: {
+    type: String,
+    default: '完整 JSON 值'
+  },
+  typeLabels: {
+    type: Object,
+    default: () => ({})
+  },
+  countLabels: {
+    type: Object,
+    default: () => ({ object: '个属性', array: '项' })
+  },
+  emptyLabels: {
+    type: Object,
+    default: () => ({ object: '空对象', array: '空数组' })
   }
 })
+
+function typeLabel(type) {
+  return props.typeLabels[type] || type
+}
+
+function countLabel(type) {
+  return props.countLabels[type] || ''
+}
+
+function emptyLabel(type) {
+  return props.emptyLabels[type] || ''
+}
 
 const FALLBACK_VIEWPORT_WIDTH = 720
 const FALLBACK_VIEWPORT_HEIGHT = 420
@@ -129,6 +167,35 @@ const surfaceStyle = computed(() => ({
 const zoomPercent = computed(() => Math.round(transform.value.scale * 100))
 const canCollapseAll = computed(() => props.graph.edges.length > 0)
 const canExpandAll = computed(() => collapsedIds.value.size > 0)
+const exportState = ref('idle')
+
+async function exportImage() {
+  if (exportState.value !== 'idle') return
+  exportState.value = 'working'
+
+  try {
+    const dataUrl = await buildGraphPng({
+      cards: positionedNodes.value,
+      edges: positionedEdges.value,
+      width: layout.value.width,
+      height: layout.value.height,
+      typeLabels: props.typeLabels,
+      countLabels: props.countLabels,
+      emptyLabels: props.emptyLabels
+    })
+
+    const copied = copyImage(dataUrl)
+    announce(copied ? '关系图已复制为图片' : '图片复制失败')
+    exportState.value = copied ? 'done' : 'failed'
+  } catch (error) {
+    announce('图片导出失败')
+    exportState.value = 'failed'
+  } finally {
+    setTimeout(() => {
+      exportState.value = 'idle'
+    }, 1500)
+  }
+}
 
 function announce(message) {
   liveMessage.value = message
@@ -144,13 +211,13 @@ function rowFocusIndex(rowId) {
 
 function cardDescribedBy(cardId) {
   return tooltip.value?.focusKey === `card:${cardId}`
-    ? 'json-graph-tooltip'
+    ? `${props.testId}-tooltip`
     : undefined
 }
 
 function rowDescribedBy(rowId) {
   return tooltip.value?.focusKey === `row:${rowId}`
-    ? 'json-graph-tooltip'
+    ? `${props.testId}-tooltip`
     : undefined
 }
 
@@ -349,10 +416,13 @@ function restoreFocusFor(target) {
 
 function handleViewportFocus(event) {
   if (event.target !== viewportElement.value) return
+  activeFocusIndex.value = 0
+  if (pointerState) return
   focusItemAt(0)
 }
 
 function handleFocusIn(event) {
+  if (pointerState) return
   const index = focusIndexFromEvent(event)
   if (index === null) return
   const item = focusItems.value[index]
@@ -553,6 +623,7 @@ function handlePointerDown(event) {
     return
   }
 
+  clearTooltip()
   pointerState = {
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -639,7 +710,7 @@ onBeforeUnmount(() => {
   <section
     ref="shellElement"
     class="json-graph"
-    data-testid="json-graph"
+    :data-testid="testId"
     :aria-label="ariaLabel"
     @keydown="handleKeydown"
     @focusout="handleShellFocusOut"
@@ -678,13 +749,21 @@ onBeforeUnmount(() => {
       >
         全部展开
       </button>
+      <button
+        type="button"
+        :disabled="exportState === 'working'"
+        data-testid="graph-export-image"
+        @click="exportImage"
+      >
+        {{ exportState === 'working' ? '导出中…' : '导出图片' }}
+      </button>
       <span class="json-graph__stats" aria-hidden="true">
         {{ projection.cards.length }} 张卡片 · {{ visibleRowCount }} 行 ·
         {{ zoomPercent }}%
       </span>
     </div>
 
-    <p id="json-graph-hint" class="json-graph__hint">
+    <p :id="`${testId}-hint`" class="json-graph__hint">
       拖拽平移，滚轮缩放；方向键浏览，Enter 检查，Space 收起卡片。
     </p>
 
@@ -697,9 +776,9 @@ onBeforeUnmount(() => {
         class="json-graph__viewport"
         role="group"
         :aria-label="ariaLabel"
-        aria-describedby="json-graph-hint"
+        :aria-describedby="`${testId}-hint`"
         tabindex="0"
-        data-testid="json-graph-viewport"
+        :data-testid="`${testId}-viewport`"
         @focus="handleViewportFocus"
         @focusin="handleFocusIn"
         @focusout="handleFocusOut"
@@ -713,7 +792,7 @@ onBeforeUnmount(() => {
       >
         <div
           class="json-graph__surface"
-          data-testid="json-graph-surface"
+          :data-testid="`${testId}-surface`"
           :style="surfaceStyle"
           :data-scale="transform.scale"
           :data-x="transform.x"
@@ -763,7 +842,7 @@ onBeforeUnmount(() => {
             :data-graph-focus-index="cardFocusIndex(node.id)"
             tabindex="-1"
             role="group"
-            :aria-label="`${node.card.type} 卡片 ${node.card.path}`"
+            :aria-label="`${typeLabel(node.card.type)} 卡片 ${node.card.path}`"
             :aria-describedby="cardDescribedBy(node.id)"
             @mouseenter="showCardTooltip(node.card)"
             @mouseleave="clearTooltip"
@@ -778,12 +857,12 @@ onBeforeUnmount(() => {
                   {{ truncateGraphText(node.card.path, 36) }}
                 </span>
                 <span class="graph-card__meta">
-                  {{ node.card.type }}
+                  {{ typeLabel(node.card.type) }}
                   <template v-if="node.card.type === 'object'">
-                    · {{ node.card.count }} 个属性
+                    · {{ node.card.count }} {{ countLabel('object') }}
                   </template>
                   <template v-else-if="node.card.type === 'array'">
-                    · {{ node.card.count }} 项
+                    · {{ node.card.count }} {{ countLabel('array') }}
                   </template>
                 </span>
               </div>
@@ -826,7 +905,7 @@ onBeforeUnmount(() => {
                 :data-graph-focus-index="rowFocusIndex(row.id)"
                 tabindex="-1"
                 role="button"
-                :aria-label="`${row.type} ${row.path}`"
+                :aria-label="`${typeLabel(row.type)} ${row.path}`"
                 :aria-describedby="rowDescribedBy(row.id)"
                 @mouseenter="showRowTooltip(row)"
                 @mouseleave="clearTooltip"
@@ -835,7 +914,7 @@ onBeforeUnmount(() => {
                 <span class="graph-row__label">
                   {{ row.displayLabel }}
                 </span>
-                <span class="graph-row__type">{{ row.type }}</span>
+                <span class="graph-row__type">{{ typeLabel(row.type) }}</span>
                 <span class="graph-row__preview">
                   {{ truncateGraphText(row.preview, 48) }}
                 </span>
@@ -843,7 +922,7 @@ onBeforeUnmount(() => {
             </div>
 
             <div v-else class="graph-card__empty">
-              {{ node.card.type === 'object' ? '空对象' : '空数组' }}
+              {{ emptyLabel(node.card.type) }}
             </div>
           </article>
         </div>
@@ -851,12 +930,12 @@ onBeforeUnmount(() => {
         <div
           v-if="tooltip"
           class="graph-tooltip"
-          id="json-graph-tooltip"
+          :id="`${testId}-tooltip`"
           role="tooltip"
-          data-testid="json-graph-tooltip"
+          :data-testid="`${testId}-tooltip`"
         >
           <div class="graph-tooltip__meta">
-            <span class="graph-tooltip__type">{{ tooltip.type }}</span>
+            <span class="graph-tooltip__type">{{ typeLabel(tooltip.type) }}</span>
             <code class="graph-tooltip__path">{{ tooltip.path }}</code>
           </div>
           <p class="graph-tooltip__preview">{{ tooltip.preview }}</p>
@@ -867,14 +946,14 @@ onBeforeUnmount(() => {
         v-if="selected"
         ref="inspectorElement"
         class="json-graph__inspector"
-        aria-label="JSON 检查器"
-        data-testid="json-graph-inspector"
+        :aria-label="inspectorLabel"
+        :data-testid="`${testId}-inspector`"
       >
         <div class="json-graph__inspector-header">
           <div>
             <span class="json-graph__inspector-label">检查器</span>
             <h2 class="json-graph__inspector-type">
-              {{ selected.type }}
+              {{ typeLabel(selected.type) }}
             </h2>
           </div>
           <button
@@ -890,7 +969,7 @@ onBeforeUnmount(() => {
         <pre
           class="json-graph__inspector-value"
           tabindex="0"
-          aria-label="完整 JSON 值"
+          :aria-label="valueLabel"
         >{{ inspectorValue }}</pre>
       </aside>
     </div>

@@ -367,8 +367,8 @@ describe('timestamp rows', () => {
     expect(result.rows.map((row) => row.label)).toEqual([
       'UTC+8 中国标准时间(本地时间)',
       'UTC+8 中国标准时间(本地时间),日期',
-      '时间戳(秒)',
-      '时间戳(毫秒)',
+      'Unix 时间戳(秒)',
+      'Unix 时间戳(毫秒)',
       '标准时间(UTC)',
       'Excel 序列日期'
     ])

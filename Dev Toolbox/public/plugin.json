@@ -2,12 +2,20 @@
   "main": "index.html",
   "logo": "logo.png",
   "development": {
-    "main": "http://localhost:5173"
+    "main": "http://127.0.0.1:5219"
   },
   "pluginSetting": {
     "single": false
   },
   "features": [
+    {
+      "code": "home",
+      "explain": "全部工具统一入口",
+      "description": "全部工具统一入口",
+      "cmds": [
+        "开发工具箱"
+      ]
+    },
     {
       "code": "timestamp",
       "explain": "日期时间格式转换",

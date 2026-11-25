@@ -1,7 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import { installUtoolsDouble } from '../../test/utoolsDouble.js'
-import { TIMESTAMP_TIMEZONES_KEY } from '../../lib/preferences.js'
 import TimestampTool from './index.vue'
 import {
   INPUT_TYPE_EXCEL,
@@ -160,18 +159,14 @@ describe('TimestampTool parser controls', () => {
     expect(wrapper.findAll('.output-row')).toHaveLength(0)
   })
 
-  it('keeps extra timezones before Excel and reads persisted selections', () => {
-    const { wrapper, double } = mountTool({
-      initialStorage: {
-        [TIMESTAMP_TIMEZONES_KEY]: ['+1']
-      }
-    })
+  it('renders the six base rows without any timezone selector', () => {
+    const { wrapper } = mountTool()
     const labels = wrapper.findAll('.output-row__label')
 
-    expect(double.calls.dbGet).toContain(TIMESTAMP_TIMEZONES_KEY)
-    expect(wrapper.findAll('.output-row')).toHaveLength(7)
-    expect(labels[5].text()).toBe('UTC+1 欧洲中部时区')
-    expect(labels[6].text()).toBe('Excel 序列日期')
+    expect(wrapper.findAll('.output-row')).toHaveLength(6)
+    expect(labels[labels.length - 1].text()).toBe('Excel 序列日期')
+    expect(wrapper.find('.timezone-trigger').exists()).toBe(false)
+    expect(wrapper.find('#timezone-panel').exists()).toBe(false)
   })
 
   it('shows a nearby note and omits Excel when local time is out of range', async () => {

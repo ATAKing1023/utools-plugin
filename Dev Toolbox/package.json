@@ -12,7 +12,8 @@
   "dependencies": {
     "diff": "9.0.0",
     "fast-xml-parser": "5.12.1",
-    "vue": "3.5.43"
+    "vue": "3.5.43",
+    "yaml": "2.8.1"
   },
   "devDependencies": {
     "@playwright/test": "1.65.1",

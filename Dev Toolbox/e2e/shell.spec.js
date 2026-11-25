@@ -6,13 +6,14 @@ import {
 } from './fixtures/utools.js'
 
 const ROUTES = [
+  ['home', '[data-tool="home"]'],
   ['timestamp', '[data-tool="timestamp"]'],
   ['uuid', '[data-tool="uuid"]'],
   ['base64', '[data-tool="base64"]'],
   ['url', '[data-tool="url"]'],
   ['diff', '.diff-tool'],
-  ['json', '.json-tool'],
-  ['xml', '.xml-tool'],
+  ['json', '[data-tool="json"]'],
+  ['xml', '[data-tool="xml"]'],
   ['jwt', '[data-tool="jwt"]']
 ]
 
@@ -92,7 +93,7 @@ test('registers lifecycle callbacks once and exposes only the documented double 
   expect(surface.calls.copyText).toEqual([])
 })
 
-test('routes every one of the eight frozen features', async ({ page }) => {
+test('routes every one of the nine frozen features', async ({ page }) => {
   const errors = collectPageErrors(page)
   await openApp(page)
 
@@ -129,5 +130,38 @@ test('routes every one of the eight frozen features', async ({ page }) => {
     window.__utoolsTest.out(false)
   })
   await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'empty')
+  expect(errors).toEqual([])
+})
+
+test('offers a unified entry that lists every tool and navigates in and back', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await openApp(page)
+
+  await page.evaluate(() => {
+    window.__utoolsTest.enter({
+      code: 'home',
+      type: 'none',
+      payload: '',
+      from: 'main'
+    })
+  })
+
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'home')
+  await expect(page.locator('[data-tool="home"]')).toBeVisible()
+  await expect(page.locator('[data-tool-code]')).toHaveCount(8)
+
+  await page.locator('[data-tool-code="timestamp"]').click()
+  await expect(page.locator('.app-shell')).toHaveAttribute(
+    'data-route',
+    'timestamp'
+  )
+  await expect(page.locator('[data-tool="timestamp"]')).toBeVisible()
+
+  await page.getByRole('button', { name: '← 全部工具' }).click()
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'home')
+  await expect(page.locator('[data-tool="home"]')).toBeVisible()
+
   expect(errors).toEqual([])
 })

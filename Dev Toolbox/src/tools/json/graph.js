@@ -3,11 +3,9 @@ import { jsonValueToDisplay } from './logic.js'
 const KIB = 1024
 
 export const GRAPH_LIMITS = Object.freeze({
-  inputBytes: 768 * KIB,
+  inputBytes: 2 * 1024 * KIB,
   containerDepth: 128,
-  cards: 500,
-  rows: 2000,
-  literalCharacters: 4096
+  rows: 10000
 })
 
 export const GRAPH_LAYOUT = Object.freeze({
@@ -28,23 +26,15 @@ export const GRAPH_MAX_SCALE = 2
 const LIMIT_META = Object.freeze({
   inputBytes: Object.freeze({
     label: 'UTF-8 输入大小',
-    display: '768 KiB'
+    display: '2 MiB'
   }),
   containerDepth: Object.freeze({
     label: '容器嵌套层级',
     display: '128 层'
   }),
-  cards: Object.freeze({
-    label: '卡片数量',
-    display: '500 张'
-  }),
   rows: Object.freeze({
     label: '总行数',
-    display: '2,000 行'
-  }),
-  literalCharacters: Object.freeze({
-    label: '单个字面量字符数',
-    display: '4,096 个字符'
+    display: '10,000 行'
   })
 })
 
@@ -117,19 +107,6 @@ export function previewGraphValue(value, type = semanticTypeOf(value)) {
   return truncateGraphText(jsonValueToDisplay(value), 120)
 }
 
-function checkPrimitiveLiteral(value, type) {
-  const literal =
-    type === 'string'
-      ? value
-      : type === 'number' || type === 'boolean'
-        ? jsonValueToDisplay(value)
-        : 'null'
-  if (literal.length > GRAPH_LIMITS.literalCharacters) {
-    return limitFailure('literalCharacters', literal.length)
-  }
-  return null
-}
-
 export function inspectJsonGraphLimits(
   value,
   inputText = inputTextOf(value)
@@ -139,14 +116,11 @@ export function inspectJsonGraphLimits(
     return limitFailure('inputBytes', inputBytes)
   }
 
-  const rootType = semanticTypeOf(value)
   let cardCount = 0
   let rowCount = 0
 
   if (!isContainer(value)) {
     cardCount = 1
-    const literalFailure = checkPrimitiveLiteral(value, rootType)
-    if (literalFailure) return literalFailure
     return {
       ok: true,
       inputBytes,
@@ -164,9 +138,6 @@ export function inspectJsonGraphLimits(
     }
 
     cardCount += 1
-    if (cardCount > GRAPH_LIMITS.cards) {
-      return limitFailure('cards', cardCount)
-    }
 
     const isArray = Array.isArray(current.value)
     const entries = isArray
@@ -177,22 +148,6 @@ export function inspectJsonGraphLimits(
       return limitFailure('rows', rowCount + entries.length)
     }
     rowCount += entries.length
-
-    for (let index = 0; index < entries.length; index += 1) {
-      const [key, child] = entries[index]
-      if (!isArray) {
-        const keyLength = String(key).length
-        if (keyLength > GRAPH_LIMITS.literalCharacters) {
-          return limitFailure('literalCharacters', keyLength)
-        }
-      }
-
-      const childType = semanticTypeOf(child)
-      if (!isContainer(child)) {
-        const literalFailure = checkPrimitiveLiteral(child, childType)
-        if (literalFailure) return literalFailure
-      }
-    }
 
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const child = entries[index][1]
@@ -344,7 +299,10 @@ export function projectVisibleGraph(graph, collapsedIds = new Set()) {
 
 export function collapseAllCardIds(graph) {
   return graph.cards
-    .filter((card) => card.id !== graph.rootId)
+    .filter(
+      (card) =>
+        Array.isArray(card.childIds) && card.childIds.length > 0
+    )
     .map((card) => card.id)
 }
 

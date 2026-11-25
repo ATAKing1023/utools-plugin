@@ -442,11 +442,11 @@ export function buildTimestampRows(
       value: localDate
     },
     {
-      label: '时间戳(秒)',
+      label: 'Unix 时间戳(秒)',
       value: String(Math.floor(parsed.timestamp / 1000))
     },
     {
-      label: '时间戳(毫秒)',
+      label: 'Unix 时间戳(毫秒)',
       value: String(parsed.timestamp)
     },
     {

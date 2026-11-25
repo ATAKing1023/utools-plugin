@@ -22,6 +22,16 @@ export function copyText(text) {
   }
 }
 
+export function copyImage(image) {
+  try {
+    const utools = getUtools()
+    if (!utools || typeof utools.copyImage !== 'function') return false
+    return Boolean(utools.copyImage(image))
+  } catch {
+    return false
+  }
+}
+
 export function hideMainWindow(isFocusPrevWindow) {
   try {
     const utools = getUtools()

@@ -278,8 +278,8 @@ describe('json graph model', () => {
     expect(unrelated.cards).toHaveLength(graph.cards.length)
     expect(unrelated.edges).toHaveLength(graph.edges.length)
     expect(collapseAllCardIds(graph)).toEqual([
-      '$["nested"]',
-      '$["nested"]["visibleChild"]'
+      '$',
+      '$["nested"]'
     ])
   })
 })
@@ -429,7 +429,7 @@ describe('json graph layout', () => {
 })
 
 describe('json graph limits', () => {
-  it('uses UTF-8 bytes and accepts exactly 768 KiB before graph work', () => {
+  it('uses UTF-8 bytes and accepts exactly 2 MiB before graph work', () => {
     const value = { ok: true }
     const exact = paddedToBytes(value, GRAPH_LIMITS.inputBytes)
     const over = `${exact} `
@@ -437,7 +437,7 @@ describe('json graph limits', () => {
     expect(utf8ByteLength('中')).toBe(3)
     expect(inspectJsonGraphLimits(value, exact)).toMatchObject({
       ok: true,
-      inputBytes: 768 * 1024
+      inputBytes: 2 * 1024 * 1024
     })
     expect(buildJsonGraph(value, exact).ok).toBe(true)
 
@@ -445,8 +445,8 @@ describe('json graph limits', () => {
     expect(limited).toMatchObject({
       ok: false,
       limit: 'inputBytes',
-      limitValue: 768 * 1024,
-      limitDisplay: '768 KiB'
+      limitValue: 2 * 1024 * 1024,
+      limitDisplay: '2 MiB'
     })
     expect(limited.cards).toBeUndefined()
   })
@@ -467,69 +467,56 @@ describe('json graph limits', () => {
     })
   })
 
-  it('accepts 500 cards and rejects 501', () => {
-    const exact = Array.from({ length: 499 }, () => ({}))
-    const over = Array.from({ length: 500 }, () => ({}))
-
-    expect(inspectJsonGraphLimits(exact)).toMatchObject({
-      ok: true,
-      cardCount: 500
-    })
-    expect(buildJsonGraph(exact).cards).toHaveLength(500)
-
-    expect(buildJsonGraph(over)).toMatchObject({
-      ok: false,
-      limit: 'cards',
-      limitValue: 500,
-      actual: 501,
-      limitDisplay: '500 张'
-    })
-  })
-
-  it('accepts 2,000 rows and rejects 2,001', () => {
+  it('accepts 10,000 rows and rejects 10,001', () => {
     const exact = Object.fromEntries(
-      Array.from({ length: 2000 }, (_, index) => [`k${index}`, index])
+      Array.from({ length: 10000 }, (_, index) => [`k${index}`, index])
     )
     const over = Object.fromEntries(
-      Array.from({ length: 2001 }, (_, index) => [`k${index}`, index])
+      Array.from({ length: 10001 }, (_, index) => [`k${index}`, index])
     )
 
     expect(inspectJsonGraphLimits(exact)).toMatchObject({
       ok: true,
-      rowCount: 2000
+      rowCount: 10000
     })
-    expect(buildJsonGraph(exact).stats.rows).toBe(2000)
+    expect(buildJsonGraph(exact).stats.rows).toBe(10000)
 
     expect(buildJsonGraph(over)).toMatchObject({
       ok: false,
       limit: 'rows',
-      limitValue: 2000,
-      actual: 2001,
-      limitDisplay: '2,000 行'
+      limitValue: 10000,
+      actual: 10001,
+      limitDisplay: '10,000 行'
     })
   })
 
-  it('accepts 4,096 literal characters and rejects 4,097 for values and keys', () => {
-    const exactValue = 'x'.repeat(4096)
-    const overValue = 'x'.repeat(4097)
-    const exactKey = { ['k'.repeat(4096)]: 1 }
-    const overKey = { ['k'.repeat(4097)]: 1 }
+  it('accepts a 1 MiB literal that fits the input size cap', () => {
+    const value = 'x'.repeat(1024 * 1024)
+    const text = JSON.stringify(value)
 
-    expect(inspectJsonGraphLimits(exactValue).ok).toBe(true)
-    expect(buildJsonGraph(exactValue).cards).toHaveLength(1)
-    expect(buildJsonGraph(overValue)).toMatchObject({
+    expect(utf8ByteLength(text)).toBeLessThan(GRAPH_LIMITS.inputBytes)
+    expect(inspectJsonGraphLimits(value, text).ok).toBe(true)
+    expect(buildJsonGraph(value, text).cards).toHaveLength(1)
+  })
+
+  it('reports the input size cap before the literal cap for oversized text', () => {
+    const value = 'x'.repeat(3 * 1024 * 1024)
+    const text = JSON.stringify(value)
+
+    expect(utf8ByteLength(text)).toBeGreaterThan(GRAPH_LIMITS.inputBytes)
+    expect(buildJsonGraph(value, text)).toMatchObject({
       ok: false,
-      limit: 'literalCharacters',
-      limitValue: 4096,
-      actual: 4097,
-      limitDisplay: '4,096 个字符'
+      limit: 'inputBytes'
     })
-    expect(inspectJsonGraphLimits(exactKey).ok).toBe(true)
-    expect(buildJsonGraph(overKey)).toMatchObject({
-      ok: false,
-      limit: 'literalCharacters',
-      limitValue: 4096,
-      actual: 4097
-    })
+  })
+
+  it('no longer carries a separate card or literal character cap', () => {
+    expect(GRAPH_LIMITS.cards).toBeUndefined()
+    expect(GRAPH_LIMITS.literalCharacters).toBeUndefined()
+    expect(Object.keys(GRAPH_LIMITS)).toEqual([
+      'inputBytes',
+      'containerDepth',
+      'rows'
+    ])
   })
 })
