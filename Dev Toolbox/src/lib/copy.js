@@ -20,6 +20,7 @@ export function getShortcutLabel(index, macOS = isMacOS()) {
 export function copyValue(value, options = {}) {
   const fullValue = stringifyValue(value)
   const { hideWindow = true } = options
+  const copied = copyText(fullValue)
   if (hideWindow) hideMainWindow()
-  return copyText(fullValue)
+  return copied
 }

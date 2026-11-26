@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildDiffResult,
-  buildUnifiedDiff,
   filterDiffRows,
   splitLineDetails
 } from './logic.js'
@@ -18,7 +17,6 @@ describe('diff logic', () => {
       changed: 0,
       unchanged: 0
     })
-    expect(result.unifiedDiff).toBe('')
   })
 
   it('reports identical non-empty input with zero change counts', () => {
@@ -131,15 +129,43 @@ describe('diff logic', () => {
     })
   })
 
-  it('builds a unified patch containing both sides and context', () => {
-    const patch = buildUnifiedDiff('one\ntwo\nthree\n', 'one\nTWO\nthree\n')
+  it('skips materializing rows for large identical inputs', () => {
+    const text = 'same\nlines\nwithout\na\ntable\n'
+    const result = buildDiffResult(text, text, { skipIdenticalRows: true })
 
-    expect(patch).toContain('--- original.txt')
-    expect(patch).toContain('+++ revised.txt')
-    expect(patch).toContain(' one')
-    expect(patch).toContain('-two')
-    expect(patch).toContain('+TWO')
-    expect(patch).toContain(' three')
+    expect(result.identical).toBe(true)
+    expect(result.rows).toEqual([])
+    expect(result.counts.unchanged).toBe(5)
+  })
+
+  it('reports a bounded result when the exact diff exceeds the limit', () => {
+    const result = buildDiffResult('old\n', 'new\n', { maxEditLength: 1 })
+
+    expect(result.limited).toBe(true)
+    expect(result.rows).toEqual([])
+    expect(result.error).toContain('停止精确比较')
+  })
+
+  it('counts all supported newline forms on the identical fast path', () => {
+    const cases = [
+      ['a', 1],
+      ['a\n', 1],
+      ['\n', 1],
+      ['\r\n', 1],
+      ['a\r\nb', 2],
+      ['a\rb', 2],
+      ['a\n\n', 2],
+      ['\r\n\r\n', 2],
+      ['a\r\n\r\nb\r', 3]
+    ]
+
+    for (const [text, expected] of cases) {
+      expect(
+        buildDiffResult(text, text, { skipIdenticalRows: true }).counts
+          .unchanged
+      ).toBe(expected)
+      expect(buildDiffResult(text, text).rows).toHaveLength(expected)
+    }
   })
 
   it('splits lines without inventing a trailing empty line', () => {
@@ -202,11 +228,10 @@ describe('filterDiffRows', () => {
     expect(filterDiffRows(rows, true)).toEqual([])
   })
 
-  it('preserves full counts, line numbers, and the unified patch', () => {
+  it('preserves full counts and line numbers', () => {
     const result = buildDiffResult('same\nold\nsame2\n', 'same\nnew\nsame2\n')
     const counts = { ...result.counts }
     const rows = result.rows.map((row) => ({ ...row }))
-    const patch = result.unifiedDiff
 
     const filtered = filterDiffRows(result.rows, true)
 
@@ -221,10 +246,6 @@ describe('filterDiffRows', () => {
     })
     expect(result.counts).toEqual(counts)
     expect(result.rows).toEqual(rows)
-    expect(result.unifiedDiff).toBe(patch)
-    expect(result.unifiedDiff).toContain(' same')
-    expect(result.unifiedDiff).toContain('-old')
-    expect(result.unifiedDiff).toContain('+new')
   })
 
   it('leaves the identical no-diff result empty when filtering', () => {
@@ -234,8 +255,6 @@ describe('filterDiffRows', () => {
     expect(result.counts.unchanged).toBe(2)
     expect(filterDiffRows(result.rows, true)).toEqual([])
     expect(result.rows).toHaveLength(2)
-    expect(result.unifiedDiff).toContain('--- original.txt')
-    expect(result.unifiedDiff).toContain('+++ revised.txt')
   })
 
   it('keeps one-sided added and removed rows intact', () => {

@@ -31,8 +31,8 @@ describe('copy helpers', () => {
 
     expect(double.calls.copyText).toEqual([overLimit])
     expect(double.events.map((event) => event.name)).toEqual([
-      'hideMainWindow',
-      'copyText'
+      'copyText',
+      'hideMainWindow'
     ])
   })
 

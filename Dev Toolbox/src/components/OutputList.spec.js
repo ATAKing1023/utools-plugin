@@ -56,8 +56,8 @@ describe('OutputList', () => {
 
     expect(double.calls.copyText).toEqual([longValue])
     expect(double.events.map((event) => event.name)).toEqual([
-      'hideMainWindow',
-      'copyText'
+      'copyText',
+      'hideMainWindow'
     ])
   })
 

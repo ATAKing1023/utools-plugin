@@ -1,10 +1,38 @@
 <script setup>
-import { computed, ref } from 'vue'
+import {
+  computed,
+  onBeforeUnmount,
+  ref,
+  shallowRef,
+  watch
+} from 'vue'
 import EmptyState from '../../components/EmptyState.vue'
 import ErrorNotice from '../../components/ErrorNotice.vue'
-import OutputList from '../../components/OutputList.vue'
 import ToolFrame from '../../components/ToolFrame.vue'
 import { buildDiffResult, filterDiffRows } from './logic.js'
+import { shouldUseWorkerDiff } from './runtime.js'
+import VirtualDiffTable from './VirtualDiffTable.vue'
+import DiffWorker from './worker.js?worker&inline'
+
+const INPUT_DEBOUNCE_MS = 180
+const WORKER_DIFF_TIMEOUT_MS = 10000
+const SYNC_DIFF_TIMEOUT_MS = 1500
+const VIRTUAL_ROW_THRESHOLD = 300
+const AUTO_FILTER_ROW_THRESHOLD = 20000
+const AUTO_FILTER_CONTEXT_RATIO = 0.5
+
+const EMPTY_RESULT = Object.freeze({
+  isEmpty: true,
+  identical: false,
+  hasDifferences: false,
+  rows: [],
+  counts: Object.freeze({
+    added: 0,
+    removed: 0,
+    changed: 0,
+    unchanged: 0
+  })
+})
 
 const props = defineProps({
   action: {
@@ -20,23 +48,210 @@ const props = defineProps({
 const original = ref('')
 const revised = ref('')
 const onlyDifferences = ref(false)
+const filterTouched = ref(false)
+const deferredResult = shallowRef(null)
+const isComputing = ref(false)
+
+let requestGeneration = 0
+let debounceTimer = 0
+let activeWorker = null
 
 const actionCode = computed(() =>
   typeof props.action?.code === 'string' ? props.action.code : ''
 )
-const result = computed(() => buildDiffResult(original.value, revised.value))
-const visibleRows = computed(() =>
-  filterDiffRows(result.value.rows, onlyDifferences.value)
+
+const isAsyncMode = computed(() =>
+  shouldUseWorkerDiff(original.value, revised.value)
 )
-const outputRows = computed(() => {
-  if (result.value.isEmpty || !result.value.unifiedDiff) return []
-  return [{ label: '统一 DIFF', value: result.value.unifiedDiff }]
+const syncResult = computed(() =>
+  isAsyncMode.value
+    ? EMPTY_RESULT
+    : buildDiffResult(original.value, revised.value, {
+        skipIdenticalRows: true,
+        timeout: SYNC_DIFF_TIMEOUT_MS
+      })
+)
+const result = computed(() =>
+  isAsyncMode.value ? deferredResult.value ?? EMPTY_RESULT : syncResult.value
+)
+const showStaleResult = computed(
+  () =>
+    isComputing.value &&
+    !result.value.isEmpty &&
+    !result.value.error
+)
+const visibleRows = computed(() =>
+  onlyDifferences.value
+    ? filterDiffRows(result.value.rows, true)
+    : result.value.rows
+)
+const isVirtualized = computed(
+  () => visibleRows.value.length > VIRTUAL_ROW_THRESHOLD
+)
+
+function disposeWorker(worker) {
+  if (!worker) return
+  worker.onmessage = null
+  worker.onerror = null
+  worker.terminate()
+  if (activeWorker === worker) activeWorker = null
+}
+
+function cancelPendingWork() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer)
+    debounceTimer = 0
+  }
+  if (activeWorker) disposeWorker(activeWorker)
+}
+
+function applyDeferredResult(generation, nextResult) {
+  if (generation !== requestGeneration) return
+  deferredResult.value = nextResult
+  isComputing.value = false
+}
+
+function runSynchronousFallback(generation, originalValue, revisedValue) {
+  try {
+    applyDeferredResult(
+      generation,
+      buildDiffResult(originalValue, revisedValue, {
+        skipIdenticalRows: true,
+        timeout: SYNC_DIFF_TIMEOUT_MS
+      })
+    )
+  } catch {
+    applyDeferredResult(generation, {
+      ...EMPTY_RESULT,
+      isEmpty: false,
+      error: '无法计算文本差异，请检查输入内容。'
+    })
+  }
+}
+
+function runWorker(generation, originalValue, revisedValue) {
+  if (generation !== requestGeneration) return
+
+  if (typeof Worker !== 'function') {
+    runSynchronousFallback(generation, originalValue, revisedValue)
+    return
+  }
+
+  try {
+    const worker = new DiffWorker()
+    activeWorker = worker
+
+    worker.onmessage = (event) => {
+      if (generation !== requestGeneration) {
+        disposeWorker(worker)
+        return
+      }
+
+      disposeWorker(worker)
+      const payload = event.data || {}
+      if (payload.error) {
+        applyDeferredResult(generation, {
+          ...EMPTY_RESULT,
+          isEmpty: false,
+          error: '无法计算文本差异，请检查输入内容。'
+        })
+        return
+      }
+      if (!payload.result || typeof payload.result !== 'object') {
+        applyDeferredResult(generation, {
+          ...EMPTY_RESULT,
+          isEmpty: false,
+          error: '无法计算文本差异，请检查输入内容。'
+        })
+        return
+      }
+      applyDeferredResult(generation, payload.result)
+    }
+
+    worker.onerror = () => {
+      disposeWorker(worker)
+      runSynchronousFallback(generation, originalValue, revisedValue)
+    }
+
+    worker.postMessage({
+      id: generation,
+      original: originalValue,
+      revised: revisedValue,
+      timeout: WORKER_DIFF_TIMEOUT_MS
+    })
+  } catch {
+    if (activeWorker) disposeWorker(activeWorker)
+    runSynchronousFallback(generation, originalValue, revisedValue)
+  }
+}
+
+watch([original, revised], ([originalValue, revisedValue]) => {
+  requestGeneration += 1
+  const generation = requestGeneration
+  cancelPendingWork()
+
+  if (!isAsyncMode.value) {
+    deferredResult.value = null
+    isComputing.value = false
+    return
+  }
+
+  if (originalValue === revisedValue) {
+    deferredResult.value = buildDiffResult(originalValue, revisedValue, {
+      skipIdenticalRows: true
+    })
+    isComputing.value = false
+    return
+  }
+
+  isComputing.value = true
+  debounceTimer = setTimeout(() => {
+    debounceTimer = 0
+    runWorker(generation, originalValue, revisedValue)
+  }, INPUT_DEBOUNCE_MS)
+})
+
+watch(
+  result,
+  (nextResult) => {
+    if (
+      filterTouched.value ||
+      nextResult.isEmpty ||
+      nextResult.error ||
+      nextResult.identical
+    ) {
+      return
+    }
+
+    const contextRatio =
+      nextResult.counts.unchanged / Math.max(1, nextResult.rows.length)
+    if (
+      nextResult.rows.length > AUTO_FILTER_ROW_THRESHOLD &&
+      contextRatio >= AUTO_FILTER_CONTEXT_RATIO
+    ) {
+      onlyDifferences.value = true
+    }
+  },
+  { flush: 'post' }
+)
+
+function markFilterTouched() {
+  filterTouched.value = true
+}
+
+onBeforeUnmount(() => {
+  requestGeneration += 1
+  cancelPendingWork()
 })
 </script>
 
 <template>
   <ToolFrame title="文本 DIFF" description="逐行比较原文与新文，定位增删改内容">
-    <div class="diff-tool" :data-action-code="actionCode">
+    <div
+      class="diff-tool"
+      :data-action-code="actionCode"
+      :aria-busy="isComputing"
+    >
       <div class="diff-inputs">
         <label class="diff-field" for="diff-original">
           <span class="diff-field__label">原文</span>
@@ -62,16 +277,39 @@ const outputRows = computed(() => {
         </label>
       </div>
 
+      <div
+        v-if="isComputing"
+        class="diff-computing"
+        role="status"
+        aria-live="polite"
+      >
+        {{
+          showStaleResult
+            ? '文本已修改，正在重新计算差异… 以下为上一次结果'
+            : '正在计算差异…'
+        }}
+      </div>
+
       <EmptyState
-        v-if="result.isEmpty"
+        v-if="!isComputing && result.isEmpty"
         message="请输入原文和新文以开始比较"
       />
 
-      <ErrorNotice v-else-if="result.error" :message="result.error" />
+      <ErrorNotice
+        v-else-if="!isComputing && result.error"
+        :message="result.error"
+      />
 
-      <template v-else>
-        <div class="diff-summary-row">
-          <section class="diff-summary" aria-label="差异统计" aria-live="polite">
+      <template v-else-if="!result.isEmpty && !result.error">
+        <div
+          class="diff-summary-row"
+          :class="{ 'diff-results--stale': showStaleResult }"
+        >
+          <section
+            class="diff-summary"
+            aria-label="差异统计"
+            :aria-live="showStaleResult ? 'off' : 'polite'"
+          >
             <span class="diff-count" data-count="added">
               新增 <strong>{{ result.counts.added }}</strong>
             </span>
@@ -89,14 +327,17 @@ const outputRows = computed(() => {
           <div class="diff-filter-controls">
             <label
               class="diff-filter"
-              :class="{ 'diff-filter--disabled': result.identical }"
+              :class="{
+                'diff-filter--disabled': result.identical || showStaleResult
+              }"
             >
               <input
                 id="diff-only-differences"
                 v-model="onlyDifferences"
                 type="checkbox"
                 class="diff-filter__input"
-                :disabled="result.identical"
+                :disabled="result.identical || showStaleResult"
+                @change="markFilterTouched"
                 :aria-controls="result.identical ? undefined : 'diff-table'"
                 :aria-describedby="
                   onlyDifferences && !result.identical
@@ -108,7 +349,7 @@ const outputRows = computed(() => {
               <span class="diff-filter__label">仅显示差异</span>
             </label>
             <span id="diff-filter-description" class="diff-visually-hidden">
-              筛选仅隐藏上下文行，统计和统一 DIFF 复制不受影响。
+              筛选仅隐藏上下文行，差异统计不受影响。
             </span>
             <p
               v-if="onlyDifferences && !result.identical"
@@ -123,6 +364,7 @@ const outputRows = computed(() => {
         <div
           v-if="result.identical"
           class="diff-identical"
+          :class="{ 'diff-results--stale': showStaleResult }"
           data-testid="diff-identical"
           role="status"
         >
@@ -130,8 +372,23 @@ const outputRows = computed(() => {
           <span>两侧文本完全一致</span>
         </div>
 
-        <div v-else class="diff-table-wrap">
-          <table id="diff-table" class="diff-table" aria-label="逐行差异">
+        <template v-else>
+          <p v-if="isVirtualized" class="diff-virtual-note">
+            行数较多，已启用虚拟滚动，仅渲染当前可见区域。
+          </p>
+
+          <VirtualDiffTable
+            v-if="isVirtualized"
+            :rows="visibleRows"
+            :class="{ 'diff-results--stale': showStaleResult }"
+          />
+
+          <div
+            v-else
+            class="diff-table-wrap"
+            :class="{ 'diff-results--stale': showStaleResult }"
+          >
+            <table id="diff-table" class="diff-table" aria-label="逐行差异">
             <thead>
               <tr>
                 <th class="diff-table__marker" scope="col">标记</th>
@@ -206,10 +463,10 @@ const outputRows = computed(() => {
                 </template>
               </tr>
             </tbody>
-          </table>
-        </div>
+            </table>
+          </div>
+        </template>
 
-        <OutputList v-if="outputRows.length" :rows="outputRows" />
       </template>
     </div>
   </ToolFrame>
@@ -259,6 +516,28 @@ const outputRows = computed(() => {
 .diff-field__input:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.diff-computing {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diff-results--stale {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.diff-virtual-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .diff-summary {

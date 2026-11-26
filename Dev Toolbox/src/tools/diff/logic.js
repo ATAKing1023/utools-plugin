@@ -1,4 +1,4 @@
-import { createTwoFilesPatch, diffLines } from 'diff'
+import { diffLines } from 'diff'
 
 export const DIFF_MARKERS = Object.freeze({
   context: '',
@@ -27,6 +27,32 @@ function normalizeInput(value) {
   return typeof value === 'string' ? value : ''
 }
 
+function countLines(value) {
+  const text = normalizeInput(value)
+  if (text.length === 0) return 0
+
+  let lines = 0
+  let endsWithNewline = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text.charCodeAt(index)
+    if (character === 10) {
+      lines += 1
+      endsWithNewline = true
+      continue
+    }
+    if (character === 13) {
+      lines += 1
+      endsWithNewline = true
+      if (text.charCodeAt(index + 1) === 10) index += 1
+      continue
+    }
+    endsWithNewline = false
+  }
+
+  return endsWithNewline ? lines : lines + 1
+}
+
 export function splitLineDetails(value) {
   const text = normalizeInput(value)
   if (text.length === 0) return []
@@ -49,41 +75,33 @@ export function splitLineDetails(value) {
   return lines
 }
 
-export function buildUnifiedDiff(originalValue, revisedValue) {
-  const original = normalizeInput(originalValue)
-  const revised = normalizeInput(revisedValue)
-
-  try {
-    return createTwoFilesPatch(
-      'original.txt',
-      'revised.txt',
-      original,
-      revised,
-      '',
-      '',
-      {
-        context: 3,
-        ignoreWhitespace: false,
-        stripTrailingCr: false
-      }
-    )
-  } catch {
-    return ''
-  }
-}
-
-export function buildDiffResult(originalValue, revisedValue) {
+export function buildDiffResult(originalValue, revisedValue, options = {}) {
   const original = normalizeInput(originalValue)
   const revised = normalizeInput(revisedValue)
   const isEmpty = original.length === 0 && revised.length === 0
+  const skipIdenticalRows = options.skipIdenticalRows === true
 
   if (isEmpty) {
     return {
       isEmpty: true,
       identical: false,
       rows: [],
-      counts: createCounts(),
-      unifiedDiff: ''
+      counts: createCounts()
+    }
+  }
+
+  if (skipIdenticalRows && original === revised) {
+    return {
+      isEmpty: false,
+      identical: true,
+      hasDifferences: false,
+      rows: [],
+      counts: {
+        added: 0,
+        removed: 0,
+        changed: 0,
+        unchanged: countLines(original)
+      }
     }
   }
 
@@ -92,7 +110,9 @@ export function buildDiffResult(originalValue, revisedValue) {
     parts = diffLines(original, revised, {
       ignoreWhitespace: false,
       stripTrailingCr: false,
-      ignoreNewlineAtEof: false
+      ignoreNewlineAtEof: false,
+      maxEditLength: options.maxEditLength,
+      timeout: options.timeout
     })
   } catch {
     return {
@@ -100,8 +120,18 @@ export function buildDiffResult(originalValue, revisedValue) {
       identical: false,
       rows: [],
       counts: createCounts(),
-      unifiedDiff: '',
       error: '无法计算文本差异，请检查输入内容。'
+    }
+  }
+
+  if (!Array.isArray(parts)) {
+    return {
+      isEmpty: false,
+      identical: false,
+      rows: [],
+      counts: createCounts(),
+      limited: true,
+      error: '文本差异过大，已停止精确比较。请缩小对比范围后重试。'
     }
   }
 
@@ -128,8 +158,9 @@ export function buildDiffResult(originalValue, revisedValue) {
     }
   }
 
-  const addRemovedLines = (lines) => {
-    for (const line of lines) {
+  const addRemovedLines = (lines, startIndex = 0) => {
+    for (let index = startIndex; index < lines.length; index += 1) {
+      const line = lines[index]
       rows.push({
         type: 'removed',
         marker: DIFF_MARKERS.removed,
@@ -144,8 +175,13 @@ export function buildDiffResult(originalValue, revisedValue) {
     }
   }
 
-  const addAddedLines = (lines, includeLineNumbers = true) => {
-    for (const line of lines) {
+  const addAddedLines = (
+    lines,
+    includeLineNumbers = true,
+    startIndex = 0
+  ) => {
+    for (let index = startIndex; index < lines.length; index += 1) {
+      const line = lines[index]
       rows.push({
         type: 'added',
         marker: DIFF_MARKERS.added,
@@ -172,13 +208,17 @@ export function buildDiffResult(originalValue, revisedValue) {
     if (part.removed) {
       const removedLines = []
       while (partIndex < parts.length && parts[partIndex].removed) {
-        removedLines.push(...splitLineDetails(parts[partIndex].value))
+        for (const line of splitLineDetails(parts[partIndex].value)) {
+          removedLines.push(line)
+        }
         partIndex += 1
       }
 
       const addedLines = []
       while (partIndex < parts.length && parts[partIndex].added) {
-        addedLines.push(...splitLineDetails(parts[partIndex].value))
+        for (const line of splitLineDetails(parts[partIndex].value)) {
+          addedLines.push(line)
+        }
         partIndex += 1
       }
 
@@ -202,27 +242,29 @@ export function buildDiffResult(originalValue, revisedValue) {
         counts.changed += 1
       }
 
-      addRemovedLines(removedLines.slice(pairedCount))
-      addAddedLines(addedLines.slice(pairedCount))
+      addRemovedLines(removedLines, pairedCount)
+      addAddedLines(addedLines, true, pairedCount)
       continue
     }
 
     const addedLines = []
     while (partIndex < parts.length && parts[partIndex].added) {
-      addedLines.push(...splitLineDetails(parts[partIndex].value))
+      for (const line of splitLineDetails(parts[partIndex].value)) {
+        addedLines.push(line)
+      }
       partIndex += 1
     }
     addAddedLines(addedLines)
   }
 
-  const hasDifferences = rows.some((row) => row.type !== 'context')
+  const hasDifferences =
+    counts.added > 0 || counts.removed > 0 || counts.changed > 0
 
   return {
     isEmpty: false,
     identical: original === revised && !hasDifferences,
     hasDifferences,
     rows,
-    counts,
-    unifiedDiff: buildUnifiedDiff(original, revised)
+    counts
   }
 }
