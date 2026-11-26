@@ -17,8 +17,9 @@ export function getShortcutLabel(index, macOS = isMacOS()) {
   return `${macOS ? 'Cmd' : 'Alt'}+${index}`
 }
 
-export function copyValue(value) {
+export function copyValue(value, options = {}) {
   const fullValue = stringifyValue(value)
-  hideMainWindow()
+  const { hideWindow = true } = options
+  if (hideWindow) hideMainWindow()
   return copyText(fullValue)
 }

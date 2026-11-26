@@ -1,5 +1,6 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import CodeEditor from './CodeEditor.vue'
 import EmptyState from './EmptyState.vue'
 import ErrorNotice from './ErrorNotice.vue'
 import ModeTabs from './ModeTabs.vue'
@@ -26,6 +27,10 @@ const props = defineProps({
     required: true
   },
   inputLabel: {
+    type: String,
+    required: true
+  },
+  editorLanguage: {
     type: String,
     required: true
   },
@@ -108,17 +113,33 @@ const props = defineProps({
   limitedTitle: {
     type: String,
     default: '关系图已达到限制'
+  },
+  showOutput: {
+    type: Boolean,
+    default: false
+  },
+  outputOpen: {
+    type: Boolean,
+    default: false
   }
 })
 
-const emit = defineEmits(['update:input', 'update:mode', 'run-action', 'paste'])
+const emit = defineEmits([
+  'update:input',
+  'update:mode',
+  'run-action',
+  'paste',
+  'close-output'
+])
+
+const codeEditor = ref(null)
 
 const isLimited = computed(
   () => props.mode === 'graph' && Boolean(props.graph?.limit)
 )
 
-function onInput(event) {
-  emit('update:input', event.target.value)
+function onInput(value) {
+  emit('update:input', value)
 }
 
 function onModeChange(nextMode) {
@@ -128,33 +149,88 @@ function onModeChange(nextMode) {
 function onPaste(event) {
   emit('paste', event)
 }
+
+function foldAll() {
+  return codeEditor.value?.foldAll() ?? false
+}
+
+function unfoldAll() {
+  return codeEditor.value?.unfoldAll() ?? false
+}
+
+function selectPath(segments) {
+  return codeEditor.value?.selectPath(segments) ?? false
+}
+
+function selectXmlAddress(address) {
+  return codeEditor.value?.selectXmlAddress(address) ?? false
+}
+
+defineExpose({
+  foldAll,
+  unfoldAll,
+  selectPath,
+  selectXmlAddress
+})
 </script>
 
 <template>
   <ToolFrame :title="title" :description="description">
     <div class="structured-tool" :data-tool="toolCode" :data-mode="mode">
-      <label class="structured-tool__field" :for="inputId">
-        <span class="structured-tool__label">{{ inputLabel }}</span>
-        <textarea
-          :id="inputId"
-          class="structured-tool__input"
-          :value="input"
-          rows="8"
-          spellcheck="false"
-          :placeholder="placeholder"
-          @input="onInput"
-          @paste="onPaste"
-        />
-      </label>
-
-      <ToolActionBar
-        v-if="actions.length > 0"
-        :actions="actions"
-        :status="actionStatus"
-        @run="emit('run-action', $event)"
-      />
+      <div
+        class="structured-tool__workspace"
+        :class="{ 'has-output': showOutput && outputOpen }"
+      >
+        <section
+          class="structured-tool__source"
+          :aria-labelledby="`${inputId}-label`"
+        >
+          <span :id="`${inputId}-label`" class="structured-tool__label">
+            {{ inputLabel }}
+          </span>
+          <CodeEditor
+            ref="codeEditor"
+            :model-value="input"
+            :language="editorLanguage"
+            :input-id="inputId"
+            :aria-label="inputLabel"
+            :placeholder="placeholder"
+            :test-id="`${toolCode}-editor`"
+            @update:model-value="onInput"
+            @paste="onPaste"
+          />
+        </section>
+        <section
+          v-if="showOutput && outputOpen"
+          class="structured-tool__output"
+          aria-label="过滤结果"
+        >
+          <button
+            type="button"
+            class="structured-tool__output-close"
+            aria-label="关闭过滤结果"
+            @click="emit('close-output')"
+          >
+            ✕
+          </button>
+          <slot name="output" />
+        </section>
+      </div>
 
       <slot name="extras" />
+
+      <div class="structured-tool__actions">
+        <ToolActionBar
+          v-if="actions.length > 0"
+          :actions="actions"
+          :status="actionStatus"
+          @run="emit('run-action', $event)"
+        >
+          <template #leading>
+            <slot name="toolbar-leading" />
+          </template>
+        </ToolActionBar>
+      </div>
 
       <ModeTabs
         :model-value="mode"
@@ -221,10 +297,62 @@ function onPaste(event) {
   min-width: 0;
 }
 
-.structured-tool__field {
+.structured-tool__workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.structured-tool__workspace.has-output {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.structured-tool__source,
+.structured-tool__output {
+  position: relative;
   display: grid;
   gap: 6px;
   min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+}
+
+.structured-tool__output-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.structured-tool__output-close:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.structured-tool__output-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.structured-tool__source:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .structured-tool__label {
@@ -233,25 +361,18 @@ function onPaste(event) {
   font-weight: 600;
 }
 
-.structured-tool__input {
-  width: 100%;
+.structured-tool__source :deep(.code-editor),
+.structured-tool__output :deep(.code-editor) {
+  height: clamp(260px, 42vh, 460px);
   min-width: 0;
-  min-height: 172px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  outline: 0;
-  background: var(--surface);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.6;
-  resize: vertical;
+  border-radius: 6px;
 }
 
-.structured-tool__input:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+.structured-tool__actions {
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
 }
 
 .structured-tool__limited {
@@ -292,9 +413,16 @@ function onPaste(event) {
   outline-offset: 2px;
 }
 
+@media (max-width: 760px) {
+  .structured-tool__workspace.has-output {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 520px) {
-  .structured-tool__input {
-    min-height: 148px;
+  .structured-tool__source :deep(.code-editor),
+  .structured-tool__output :deep(.code-editor) {
+    height: 240px;
   }
 }
 </style>

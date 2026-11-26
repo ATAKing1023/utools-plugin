@@ -27,6 +27,17 @@ async function enterJson(page) {
   await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'json')
 }
 
+async function jsonInputValue(page) {
+  return page.getByTestId('json-editor').getAttribute('data-value')
+}
+
+function expectJsonInputValue(page, value) {
+  return expect(page.getByTestId('json-editor')).toHaveAttribute(
+    'data-value',
+    value
+  )
+}
+
 function collectNetworkRequests(page) {
   const requests = []
   page.on('request', (request) => {
@@ -196,7 +207,7 @@ test('defaults to the graph and preserves two-mode state, tree, actions, and cop
     'true'
   )
   await expect(page.locator('.graph-card')).toHaveCount(5)
-  const inputValue = await page.locator('#json-input').inputValue()
+  const inputValue = await jsonInputValue(page)
 
   await page.locator('#json-input').fill('{ "name": 1, }')
   const errorNotice = page.locator('.error-notice')
@@ -222,11 +233,11 @@ test('defaults to the graph and preserves two-mode state, tree, actions, and cop
   await expect(tree).toContainText('enabled')
   await tree.getByRole('button', { name: '展开 items' }).click()
   await expect(tree).toContainText('[0]')
-  await expect(page.locator('#json-input')).toHaveValue(inputValue)
+  await expectJsonInputValue(page, inputValue)
 
   await page.getByRole('tab', { name: '关系图' }).click()
   await expect(page.locator('.graph-card')).toHaveCount(5)
-  await expect(page.locator('#json-input')).toHaveValue(inputValue)
+  await expectJsonInputValue(page, inputValue)
 
   await page.getByRole('button', { name: '压缩复制' }).click()
   await expect
@@ -256,7 +267,7 @@ test('defaults to the graph and preserves two-mode state, tree, actions, and cop
     'data-mode',
     'graph'
   )
-  await expect(page.locator('#json-input')).toHaveValue(inputValue)
+  await expectJsonInputValue(page, inputValue)
 
   await expectClean(errors, requests)
 })
@@ -678,6 +689,7 @@ test('pans, zooms around the pointer, fits, and resets without page scrolling', 
   await page.locator('#json-input').fill(JSON.stringify(sample, null, 2))
   const viewport = page.locator('[data-testid="json-graph-viewport"]')
   await expect(page.locator('.graph-card').first()).toBeVisible()
+  await viewport.scrollIntoViewIfNeeded()
 
   const box = await viewport.boundingBox()
   expect(box).not.toBeNull()
@@ -739,6 +751,7 @@ test('does not auto-pan when pressing the graph background after panning', async
   await expect(page.locator('.graph-card').first()).toBeVisible()
 
   const viewport = page.locator('[data-testid="json-graph-viewport"]')
+  await viewport.scrollIntoViewIfNeeded()
   const box = await viewport.boundingBox()
   expect(box).not.toBeNull()
   const point = await emptyViewportPoint(page)
@@ -822,8 +835,20 @@ test('offers editor actions under the input and copies derived formats', async (
   const bar = page.locator('[data-testid="tool-action-bar"]')
   await expect(bar).toBeVisible()
   expect(
-    await page.locator('[data-action-id]').allTextContents()
-  ).toEqual(['格式化', '去注释', '压缩复制', '压缩转义复制', '转 XML 复制', '转 TS 复制'])
+    await page.locator('[data-action-id]').evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('aria-label'))
+    )
+  ).toEqual([
+    '格式化',
+    '折叠全部',
+    '展开全部',
+    '转 XML 复制',
+    '转 TS 复制',
+    '复制 JSON',
+    '去注释',
+    '压缩复制',
+    '压缩转义复制'
+  ])
 
   await page.locator('#json-input').fill('{"name":"Ada","tags":["a"]}')
 
@@ -851,15 +876,79 @@ test('offers editor actions under the input and copies derived formats', async (
     )
     .toContain('name: string')
 
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  await page.getByRole('button', { name: '复制 JSON' }).click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toBe(JSON.stringify({ name: 'Ada', tags: ['a'] }, null, 2))
+
   await page.getByRole('button', { name: '格式化' }).click()
-  await expect(page.locator('#json-input')).toHaveValue(
+  await expectJsonInputValue(
+    page,
     JSON.stringify({ name: 'Ada', tags: ['a'] }, null, 2)
   )
 
   await page.locator('#json-input').fill('{\n  // comment\n  "a": 1\n}')
   await page.getByRole('button', { name: '去注释' }).click()
-  await expect(page.locator('#json-input')).toHaveValue('{\n  "a": 1\n}')
+  await expectJsonInputValue(page, '{\n  "a": 1\n}')
 
+  expect(errors).toEqual([])
+})
+
+test('shows line numbers, folds nodes, and keeps the window open for every action', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill(JSON.stringify(sample, null, 2))
+
+  const editor = page.getByTestId('json-editor')
+  const lineNumbers = editor.locator('.cm-lineNumbers .cm-gutterElement')
+  const foldMarkers = editor.locator('.cm-foldGutter .cm-gutterElement')
+  await expect(editor.locator('.cm-lineNumbers')).toBeVisible()
+  await expect(editor.locator('.cm-foldGutter')).toBeVisible()
+  expect(await lineNumbers.count()).toBeGreaterThan(1)
+  expect(await foldMarkers.count()).toBeGreaterThan(0)
+
+  const expandedLineCount = await editor.locator('.cm-line').count()
+  await page.locator('[data-action-id="fold-all"]').click()
+  await expect
+    .poll(() => editor.locator('.cm-line').count())
+    .toBeLessThan(expandedLineCount)
+  await expect(page.locator('.tool-action-bar__status')).toHaveText(
+    '已折叠全部节点'
+  )
+
+  await page.locator('[data-action-id="unfold-all"]').click()
+  await expect
+    .poll(() => editor.locator('.cm-line').count())
+    .toBe(expandedLineCount)
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  for (const actionId of [
+    'format',
+    'fold-all',
+    'unfold-all',
+    'to-xml',
+    'to-typescript',
+    'copy-json',
+    'strip-comments',
+    'compress',
+    'compress-escaped'
+  ]) {
+    await page.locator(`[data-action-id="${actionId}"]`).click()
+  }
+
+  expect(
+    await page.evaluate(
+      () => window.__utoolsTest.getCalls().hideMainWindow
+    )
+  ).toEqual([])
+  expect(
+    await page.evaluate(() => window.__utoolsTest.getCalls().copyText)
+  ).toHaveLength(5)
   expect(errors).toEqual([])
 })
 
@@ -928,31 +1017,316 @@ test('auto-converts URL params, XML and YAML and evaluates JS filters', async ({
     page.getByText('已识别为 URL Params，已自动转为 JSON')
   ).toBeVisible()
   await page.getByRole('button', { name: '格式化' }).click()
-  await expect(input).toHaveValue(
+  await expectJsonInputValue(
+    page,
     JSON.stringify({ name: 'Ada', role: 'admin' }, null, 2)
   )
 
   await input.fill('<root id="1"><name>Ada</name></root>')
   await expect(page.getByText('已识别为 XML，已自动转为 JSON')).toBeVisible()
   await page.getByRole('button', { name: '格式化' }).click()
-  await expect(input).toHaveValue(
+  await expectJsonInputValue(
+    page,
     JSON.stringify({ '@id': '1', name: 'Ada' }, null, 2)
   )
 
   await input.fill('name: Ada\nactive: true')
   await expect(page.getByText('已识别为 YAML，已自动转为 JSON')).toBeVisible()
   await page.getByRole('button', { name: '格式化' }).click()
-  await expect(input).toHaveValue(
+  await expectJsonInputValue(
+    page,
     JSON.stringify({ name: 'Ada', active: true }, null, 2)
   )
 
   await input.fill('{"rows":[{"val":1},{"val":2}]}')
   await page.locator('#json-js-filter').fill('.rows.map(x=>x.val)')
-  await expect(page.locator('[data-testid="json-filter-output"]')).toHaveText(
+  await expect(page.locator('[data-testid="json-filter-output"]')).toHaveAttribute(
+    'data-value',
     '[\n  1,\n  2\n]'
   )
 
   expect(errors).toEqual([])
+})
+
+test('opens the filter drawer on demand, keeps the filter with the actions, and selects in both panes', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill(
+    JSON.stringify({ datasetList: [{ name: '运行态势' }] }, null, 2)
+  )
+
+  const source = page.locator('.structured-tool__source')
+  const output = page.locator('.structured-tool__output')
+  await expect(output).toHaveCount(0)
+
+  const filterInput = page.locator('#json-js-filter')
+  const firstAction = page.locator('[data-action-id]').first()
+  const inputBox = await filterInput.boundingBox()
+  const actionBox = await firstAction.boundingBox()
+  expect(Math.abs(inputBox.y - actionBox.y)).toBeLessThan(4)
+
+  await filterInput.fill('.datasetList[0]')
+  await expect(output).toBeVisible()
+
+  const sourceBox = await source.boundingBox()
+  const outputBox = await output.boundingBox()
+  expect(outputBox.x).toBeGreaterThan(sourceBox.x + sourceBox.width - 1)
+
+  const result = page.getByTestId('json-filter-output')
+  await expect(result).toContainText('运行态势')
+
+  await filterInput.fill('')
+  await expect(output).toHaveCount(0)
+
+  await filterInput.fill('.datasetList[0]')
+  await expect(output).toBeVisible()
+
+  await page.locator('#json-input').click()
+  await page.keyboard.press('Control+a')
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.querySelector('[data-testid="json-editor"] .cm-content')
+          ?.textContent?.length ?? 0
+      )
+    )
+    .toBeGreaterThan(0)
+  expect(
+    await page.evaluate(() => window.getSelection()?.toString()?.length ?? 0)
+  ).toBeGreaterThan(0)
+
+  await page.locator('#json-filter-output').click()
+  await page.keyboard.press('Control+a')
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          document.querySelector(
+            '[data-testid="json-filter-output"] .cm-content'
+          )?.textContent?.length ?? 0
+      )
+    )
+    .toBeGreaterThan(0)
+  expect(
+    await page.evaluate(() => window.getSelection()?.toString()?.length ?? 0)
+  ).toBeGreaterThan(0)
+
+  const gutterWidth = await page.evaluate(() => {
+    const element = document.querySelector(
+      '[data-testid="json-editor"] .cm-lineNumbers .cm-gutterElement'
+    )
+    return element?.getBoundingClientRect().width ?? 0
+  })
+  expect(gutterWidth).toBeLessThan(20)
+
+  await expectClean(errors, [])
+})
+
+test('keeps long lines unwrapped and scrolls horizontally instead', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+
+  const longValue = `long-${'x'.repeat(400)}`
+  await page.locator('#json-input').fill(
+    JSON.stringify({ rows: [{ value: longValue }] }, null, 2)
+  )
+  await page.locator('#json-js-filter').fill('.rows[0].value')
+  await expect(page.locator('.structured-tool__output')).toBeVisible()
+
+  const panes = await page.evaluate(() => {
+    const read = (testId) => {
+      const scroller = document.querySelector(
+        `[data-testid="${testId}"] .cm-scroller`
+      )
+      const lines = Array.from(
+        document.querySelectorAll(`[data-testid="${testId}"] .cm-line`)
+      )
+      return {
+        canScrollX: scroller.scrollWidth > scroller.clientWidth,
+        lineHeights: lines.map((line) => line.getBoundingClientRect().height)
+      }
+    }
+
+    return {
+      source: read('json-editor'),
+      output: read('json-filter-output')
+    }
+  })
+
+  expect(panes.source.canScrollX).toBe(true)
+  expect(panes.output.canScrollX).toBe(true)
+  for (const height of panes.source.lineHeights) {
+    expect(height).toBeLessThan(30)
+  }
+  for (const height of panes.output.lineHeights) {
+    expect(height).toBeLessThan(30)
+  }
+
+  await expectClean(errors, [])
+})
+
+test('locates the element referenced by a simple expression', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill(
+    JSON.stringify(
+      { rows: [{ name: 'alpha' }, { name: 'beta' }], meta: { count: 2 } },
+      null,
+      2
+    )
+  )
+
+  const control = page.locator('.tool-action-bar .expression-input')
+  await expect(control.locator('.expression-input__prefix')).toHaveText('this')
+
+  const locate = page.getByRole('button', {
+    name: '定位到表达式对应元素'
+  })
+  await expect(control.locator('#json-js-filter')).toBeVisible()
+  await expect(control.getByRole('button')).toHaveCount(1)
+  await expect(locate).toBeDisabled()
+  await expect(locate.locator('svg.tool-action-icon')).toBeVisible()
+  expect((await locate.textContent()).trim()).toBe('')
+
+  await page.locator('#json-js-filter').fill('.rows[1].name')
+  await expect(
+    page.locator('.structured-tool__output .json-filter__label')
+  ).toHaveText('表达式结果')
+  await expect(locate).toBeEnabled()
+  await locate.click()
+
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+    .toContain('beta')
+  await expect(page.locator('.tool-action-bar__status')).toHaveText(
+    '已定位到表达式对应元素'
+  )
+
+  await page.locator('#json-js-filter').fill('.rows.map(x=>x.name)')
+  await expect(locate).toBeDisabled()
+
+  await expectClean(errors, [])
+})
+
+test('ignores action shortcuts while typing in the expression input', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+  await page.locator('#json-input').fill('{\n  "a": 1\n}')
+
+  const editor = page.getByTestId('json-editor')
+  const filter = page.locator('#json-js-filter')
+  await filter.fill('.a')
+  const expandedLineCount = await editor.locator('.cm-line').count()
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  for (const key of [
+    'Alt+C',
+    'Alt+Backslash',
+    'Alt+Period',
+    'Alt+Shift+Period'
+  ]) {
+    await page.keyboard.press(key)
+  }
+
+  expect(
+    await page.evaluate(() => window.__utoolsTest.getCalls().copyText)
+  ).toEqual([])
+  expect(await editor.locator('.cm-line').count()).toBe(expandedLineCount)
+  await expect(filter).toHaveValue('.a')
+
+  await page.getByRole('tab', { name: '关系图' }).focus()
+  await page.keyboard.press('Alt+C')
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__utoolsTest.getCalls().copyText[0] || null)
+    )
+    .toBe('{"a":1}')
+
+  await page.keyboard.press('Alt+Period')
+  await expect(page.locator('.tool-action-bar__status')).toHaveText(
+    '已折叠全部节点'
+  )
+
+  await expectClean(errors, [])
+})
+
+test('pins the parent path of the top visible node while scrolling', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterJson(page)
+
+  const rows = Array.from(
+    { length: 200 },
+    (_, index) => `    {"index": ${index}}${index === 199 ? '' : ','}`
+  ).join('\n')
+  await page
+    .locator('#json-input')
+    .fill(`{\n  "data": [\n${rows}\n  ]\n}`)
+
+  const toggleScroll = (scrollTop) =>
+    page.evaluate((top) => {
+      document.querySelector(
+        '[data-testid="json-editor"] .cm-scroller'
+      ).scrollTop = top
+    }, scrollTop)
+  const sticky = page.locator('[data-testid="code-editor-sticky-path"]')
+
+  await toggleScroll(0)
+  await expect(sticky).toHaveCount(0)
+
+  await toggleScroll(100)
+  await expect(sticky).toBeVisible()
+  const first = await page.evaluate(() => {
+    const scroller = document.querySelector(
+      '[data-testid="json-editor"] .cm-scroller'
+    )
+    const top = scroller.getBoundingClientRect().top
+    const line = Array.from(scroller.querySelectorAll('.cm-line')).find(
+      (candidate) => candidate.getBoundingClientRect().bottom > top + 0.5
+    )
+    return {
+      line: line?.textContent ?? '',
+      path: document
+        .querySelector('[data-testid="code-editor-sticky-path"]')
+        ?.textContent?.trim() ?? ''
+    }
+  })
+  const firstIndex = Number(/"index": (\d+)/.exec(first.line)?.[1])
+  expect(firstIndex).not.toBeNaN()
+  expect(first.path).toBe(`data › [${firstIndex}]`)
+
+  await toggleScroll(250)
+  await expect(sticky).toBeVisible()
+  const second = await page.evaluate(() => {
+    const scroller = document.querySelector(
+      '[data-testid="json-editor"] .cm-scroller'
+    )
+    const top = scroller.getBoundingClientRect().top
+    const line = Array.from(scroller.querySelectorAll('.cm-line')).find(
+      (candidate) => candidate.getBoundingClientRect().bottom > top + 0.5
+    )
+    return {
+      line: line?.textContent ?? '',
+      path: document
+        .querySelector('[data-testid="code-editor-sticky-path"]')
+        ?.textContent?.trim() ?? ''
+    }
+  })
+  const secondIndex = Number(/"index": (\d+)/.exec(second.line)?.[1])
+  expect(secondIndex).not.toBeNaN()
+  expect(second.path).toBe(`data › [${secondIndex}]`)
+  expect(second.path).not.toBe(first.path)
+
+  await expectClean(errors, [])
 })
 
 test('exports the relationship graph as a PNG image to the clipboard', async ({

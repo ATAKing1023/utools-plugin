@@ -22,6 +22,13 @@
   --text-muted: #888a91;
   --accent: #2f6feb;
   --syntax-value: #a24800;
+  --syntax-property: #0451a5;
+  --syntax-string: #a31515;
+  --syntax-number: #098658;
+  --syntax-keyword: #0000ff;
+  --syntax-comment: #008000;
+  --syntax-tag: #800000;
+  --syntax-punctuation: #555555;
   --danger-text: #9b2525;
   --danger-border: #f1b7b7;
   --danger-surface: #fff5f5;
@@ -41,6 +48,13 @@
     --text-muted: #9498a1;
     --accent: #74a0ff;
     --syntax-value: #ffb86b;
+    --syntax-property: #9cdcfe;
+    --syntax-string: #ce9178;
+    --syntax-number: #b5cea8;
+    --syntax-keyword: #569cd6;
+    --syntax-comment: #6a9955;
+    --syntax-tag: #569cd6;
+    --syntax-punctuation: #d4d4d4;
     --danger-text: #ffb4b4;
     --danger-border: #743d3d;
     --danger-surface: #382526;

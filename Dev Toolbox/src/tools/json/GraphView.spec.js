@@ -149,7 +149,7 @@ describe('GraphView', () => {
     )
   })
 
-  it('closes tooltip and inspector when the pointer or focus leaves the graph', async () => {
+  it('closes the tooltip when the pointer leaves and the inspector when focus leaves', async () => {
     const { wrapper } = await mountGraph(sample)
     const row = rowByPath(wrapper, '$["title"]')
     const inspector = () =>
@@ -167,7 +167,7 @@ describe('GraphView', () => {
     await row.trigger('click')
     expect(inspector().exists()).toBe(true)
     await wrapper.get('[data-testid="json-graph"]').trigger('pointerleave')
-    expect(inspector().exists()).toBe(false)
+    expect(inspector().exists()).toBe(true)
 
     await row.trigger('click')
     expect(inspector().exists()).toBe(true)

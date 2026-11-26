@@ -1,5 +1,7 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import CodeEditor from '../../components/CodeEditor.vue'
+import ExpressionInput from '../../components/ExpressionInput.vue'
 import StructuredToolShell from '../../components/StructuredToolShell.vue'
 import {
   compressEscapedJsonText,
@@ -18,6 +20,7 @@ import {
 } from './logic.js'
 import { buildJsonTree } from './tree.js'
 import { copyValue } from '../../lib/copy.js'
+import { isTextEntryTarget } from '../../lib/keyboard.js'
 
 const props = defineProps({
   action: {
@@ -36,31 +39,61 @@ const MODES = Object.freeze([
 ])
 
 const ACTIONS = Object.freeze([
-  Object.freeze({ id: 'format', label: '格式化', title: '重新格式化 JSON' }),
   Object.freeze({
-    id: 'strip-comments',
-    label: '去注释',
-    title: '去除注释'
+    id: 'format',
+    label: '格式化',
+    title: '重新格式化「Alt + F」',
+    icon: 'data-object'
   }),
   Object.freeze({
-    id: 'compress',
-    label: '压缩复制',
-    title: '压缩 JSON 并复制'
+    id: 'fold-all',
+    label: '折叠全部',
+    title: '折叠全部「Alt + >」',
+    icon: 'unfold-less'
   }),
   Object.freeze({
-    id: 'compress-escaped',
-    label: '压缩转义复制',
-    title: '压缩转义 JSON 并复制'
+    id: 'unfold-all',
+    label: '展开全部',
+    title: '展开全部「Alt + Shift + >」',
+    icon: 'unfold-more'
   }),
   Object.freeze({
     id: 'to-xml',
     label: '转 XML 复制',
-    title: 'JSON 转 XML 并复制'
+    title: 'JSON 转 XML 并复制',
+    icon: 'code',
+    dividerBefore: true
   }),
   Object.freeze({
     id: 'to-typescript',
     label: '转 TS 复制',
-    title: 'JSON 转 TypeScript 并复制'
+    title: 'JSON 转 TypeScript 并复制',
+    icon: 'description'
+  }),
+  Object.freeze({
+    id: 'copy-json',
+    label: '复制 JSON',
+    title: '复制格式化 JSON',
+    icon: 'content-copy'
+  }),
+  Object.freeze({
+    id: 'strip-comments',
+    label: '去注释',
+    title: '去除注释',
+    icon: 'comments-disabled',
+    dividerBefore: true
+  }),
+  Object.freeze({
+    id: 'compress',
+    label: '压缩复制',
+    title: '压缩 JSON 并复制「Alt + C」',
+    icon: 'compress'
+  }),
+  Object.freeze({
+    id: 'compress-escaped',
+    label: '压缩转义复制',
+    title: '压缩转义 JSON 并复制「Alt + \\」',
+    icon: 'format-quote'
   })
 ])
 
@@ -87,6 +120,8 @@ const input = ref(initialInput(props.action))
 const mode = ref('graph')
 const actionStatus = ref('')
 const filterExpression = ref('')
+const shellRef = ref(null)
+const outputOpen = ref(false)
 
 const analysis = computed(() => {
   if (isJsonInputEmpty(input.value)) return { state: 'empty' }
@@ -139,6 +174,54 @@ const filterResult = computed(() => {
   return evaluateJsFilter(filterExpression.value, analysis.value.value)
 })
 
+const filterOutput = computed(() => filterResult.value.output)
+const locateSegments = computed(() => {
+  if (analysis.value.state !== 'ready' || analysis.value.source !== 'json') {
+    return null
+  }
+  return parseLocatePath(filterExpression.value)
+})
+
+function parseLocatePath(expression) {
+  const text = typeof expression === 'string' ? expression.trim() : ''
+  if (!text) return null
+
+  const segments = []
+  let index = 0
+  while (index < text.length) {
+    const rest = text.slice(index)
+    const dotKey = /^\.([A-Za-z_$][\w$]*)/.exec(rest)
+    if (dotKey) {
+      segments.push(dotKey[1])
+      index += dotKey[0].length
+      continue
+    }
+
+    const arrayIndex = /^\[(\d+)\]/.exec(rest)
+    if (arrayIndex) {
+      segments.push(Number(arrayIndex[1]))
+      index += arrayIndex[0].length
+      continue
+    }
+
+    const quotedKey = /^\[("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\]/.exec(rest)
+    if (quotedKey) {
+      const raw = quotedKey[1]
+      try {
+        segments.push(raw.startsWith('"') ? JSON.parse(raw) : raw.slice(1, -1))
+      } catch {
+        return null
+      }
+      index += quotedKey[0].length
+      continue
+    }
+
+    return null
+  }
+
+  return segments.length > 0 ? segments : null
+}
+
 const sourceLabel = computed(
   () => JSON_SOURCE_LABELS[analysis.value.source] ?? ''
 )
@@ -161,6 +244,62 @@ function setStatus(message) {
     }, 2500)
   }
 }
+
+function onFilterInput(value) {
+  filterExpression.value = value
+  outputOpen.value = value.trim() !== ''
+}
+
+function closeOutput() {
+  outputOpen.value = false
+}
+
+function locateSelection() {
+  const segments = locateSegments.value
+  if (!segments) {
+    setStatus('请输入可定位的路径表达式，例如 .a.b 或 [0][1]')
+    return
+  }
+
+  const located = shellRef.value?.selectPath(segments) ?? false
+  setStatus(located ? '已定位到表达式对应元素' : '未在源码中找到该路径')
+}
+
+function copyResult(text, successMessage) {
+  const copied = copyValue(text, { hideWindow: false })
+  setStatus(copied ? successMessage : '复制失败')
+}
+
+function handleShortcut(event) {
+  if (
+    !event.altKey ||
+    event.isComposing ||
+    isTextEntryTarget(event.target)
+  ) {
+    return
+  }
+
+  let actionId = ''
+  if (event.code === 'KeyF') actionId = 'format'
+  else if (event.code === 'KeyC') actionId = 'compress'
+  else if (event.code === 'Backslash') actionId = 'compress-escaped'
+  else if (event.code === 'Period') {
+    actionId = event.shiftKey ? 'unfold-all' : 'fold-all'
+  }
+
+  if (!actionId) return
+  event.preventDefault()
+  event.stopPropagation()
+  runAction(actionId)
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleShortcut, true)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleShortcut, true)
+})
 
 function handlePaste(event) {
   const text = event.clipboardData?.getData('text')
@@ -204,21 +343,30 @@ function runAction(id) {
       input.value = analysis.value.formatted
       setStatus('已格式化')
       return
+    case 'fold-all': {
+      const folded = shellRef.value?.foldAll() ?? false
+      setStatus(folded ? '已折叠全部节点' : '没有可折叠的节点')
+      return
+    }
+    case 'unfold-all': {
+      const unfolded = shellRef.value?.unfoldAll() ?? false
+      setStatus(unfolded ? '已展开全部节点' : '没有可展开的节点')
+      return
+    }
     case 'compress':
-      copyValue(compressJsonText(input.value))
-      setStatus('已复制压缩 JSON')
+      copyResult(compressJsonText(input.value), '已复制压缩 JSON')
       return
     case 'compress-escaped':
-      copyValue(compressEscapedJsonText(input.value))
-      setStatus('已复制压缩转义 JSON')
+      copyResult(compressEscapedJsonText(input.value), '已复制压缩转义 JSON')
       return
     case 'to-xml':
-      copyValue(jsonToXml(value))
-      setStatus('已复制转换 XML')
+      copyResult(jsonToXml(value), '已复制转换 XML')
       return
     case 'to-typescript':
-      copyValue(jsonToTypeScriptInterface(value))
-      setStatus('已复制转换 TypeScript')
+      copyResult(jsonToTypeScriptInterface(value), '已复制转换 TypeScript')
+      return
+    case 'copy-json':
+      copyResult(analysis.value.formatted, '已复制 JSON')
       return
     default:
       return
@@ -228,11 +376,15 @@ function runAction(id) {
 
 <template>
   <StructuredToolShell
+    ref="shellRef"
     title="JSON 工具"
     description="可视化、格式化并复制 JSON 数据"
     tool-code="json"
     input-id="json-input"
     input-label="JSON 输入"
+    editor-language="json"
+    show-output
+    :output-open="outputOpen"
     placeholder='粘贴 JSON，例如 {"name":"Dev Toolbox"}'
     :input="input"
     :state="analysis.state"
@@ -253,34 +405,41 @@ function runAction(id) {
     @update:mode="mode = $event"
     @run-action="runAction"
     @paste="handlePaste"
+    @close-output="closeOutput"
   >
-    <template #extras>
-      <section class="json-filter" aria-label="JSON JS 过滤">
-        <label class="json-filter__label" for="json-js-filter">
-          JS 过滤
-        </label>
-        <input
-          id="json-js-filter"
-          v-model="filterExpression"
-          class="json-filter__input"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder='.key.subkey、[0][1]、.map(x=>x.val)'
+    <template #toolbar-leading>
+      <ExpressionInput
+        :model-value="filterExpression"
+        prefix="this"
+        input-id="json-js-filter"
+        placeholder=".key.subkey、[0][1]、.map(x=>x.val)"
+        aria-label="表达式"
+        :locate-disabled="!locateSegments"
+        @update:model-value="onFilterInput"
+        @locate="locateSelection"
+      />
+      <p
+        v-if="analysis.state === 'ready' && analysis.source !== 'json'"
+        class="json-filter__source"
+        role="status"
+        aria-live="polite"
+      >
+        已识别为 {{ sourceLabel }}，已自动转为 JSON
+      </p>
+    </template>
+
+    <template #output>
+      <section class="json-filter" aria-label="JSON 表达式结果">
+        <span class="json-filter__label">表达式结果</span>
+        <CodeEditor
+          class="json-filter__editor"
+          :model-value="filterOutput"
+          language="json"
+          input-id="json-filter-output"
+          aria-label="表达式结果"
+          test-id="json-filter-output"
+          read-only
         />
-        <p
-          v-if="analysis.state === 'ready' && analysis.source !== 'json'"
-          class="json-filter__source"
-          role="status"
-          aria-live="polite"
-        >
-          已识别为 {{ sourceLabel }}，已自动转为 JSON
-        </p>
-        <pre
-          v-if="filterResult.output"
-          class="json-filter__output"
-          data-testid="json-filter-output"
-        >{{ filterResult.output }}</pre>
       </section>
     </template>
   </StructuredToolShell>
@@ -294,28 +453,11 @@ function runAction(id) {
 }
 
 .json-filter__label {
+  flex: 0 0 auto;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 600;
-}
-
-.json-filter__input {
-  width: 100%;
-  min-width: 0;
-  min-height: 32px;
-  padding: 5px 9px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  outline: 0;
-  background: var(--surface);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-.json-filter__input:focus-visible {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  white-space: nowrap;
 }
 
 .json-filter__source {
@@ -324,19 +466,10 @@ function runAction(id) {
   font-size: 11.5px;
 }
 
-.json-filter__output {
-  max-height: 220px;
-  margin: 0;
-  overflow: auto;
-  padding: 8px 10px;
+.json-filter__editor {
+  height: clamp(260px, 42vh, 460px);
+  min-width: 0;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--surface-raised);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 </style>

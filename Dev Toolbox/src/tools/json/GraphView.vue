@@ -283,6 +283,10 @@ function closeOverlays() {
   selected.value = null
 }
 
+function dismissOverlays() {
+  tooltip.value = null
+}
+
 function openInspector(item) {
   if (!item) return
   selected.value = {
@@ -714,7 +718,7 @@ onBeforeUnmount(() => {
     :aria-label="ariaLabel"
     @keydown="handleKeydown"
     @focusout="handleShellFocusOut"
-    @pointerleave="closeOverlays"
+    @pointerleave="dismissOverlays"
   >
     <div class="json-graph__toolbar" role="toolbar" aria-label="关系图控制">
       <button type="button" @click="fitView()">适应视图</button>

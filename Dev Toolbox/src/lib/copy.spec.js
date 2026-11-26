@@ -45,6 +45,15 @@ describe('copy helpers', () => {
     expect(getShortcutLabel(10, true)).toBe('复制')
     expect(getShortcutLabel(0, false)).toBe('复制')
   })
+
+  it('can copy without hiding the current window', () => {
+    const double = installUtoolsDouble()
+    copyValue('{ "action": "copy" }', { hideWindow: false })
+
+    expect(double.calls.copyText).toEqual(['{ "action": "copy" }'])
+    expect(double.calls.hideMainWindow).toEqual([])
+    expect(double.events.map((event) => event.name)).toEqual(['copyText'])
+  })
 })
 
 describe('safe uTools wrappers', () => {

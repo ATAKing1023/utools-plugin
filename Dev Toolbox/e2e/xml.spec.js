@@ -42,6 +42,17 @@ async function enterXml(page, action = null) {
   await expect(page.locator('.app-shell')).toHaveAttribute('data-route', 'xml')
 }
 
+async function xmlInputValue(page) {
+  return page.getByTestId('xml-editor').getAttribute('data-value')
+}
+
+function expectXmlInputValue(page, value) {
+  return expect(page.getByTestId('xml-editor')).toHaveAttribute(
+    'data-value',
+    value
+  )
+}
+
 async function expectNoPageOverflow(page) {
   const metrics = await page.evaluate(() => ({
     documentWidth: document.documentElement.scrollWidth,
@@ -93,7 +104,7 @@ test('shows an open XML tree with attributes, comments and CDATA', async ({
   await expect(tree).toContainText('@kind')
 
   await page.getByRole('button', { name: '格式化' }).click()
-  await expect(page.locator('#xml-input')).toHaveValue(formattedSample)
+  await expectXmlInputValue(page, formattedSample)
 
   await page.evaluate(() => window.__utoolsTest.resetCalls())
   await page.getByRole('button', { name: '复制 XML' }).click()
@@ -154,7 +165,8 @@ test('shows XML line and column errors and remains usable at 375px', async ({
   await page.getByRole('tab', { name: '结构树' }).click()
   await expect(page.locator('[data-testid="xml-tree"]')).toBeVisible()
   await page.getByRole('button', { name: '格式化' }).click()
-  await expect(page.locator('#xml-input')).toHaveValue(
+  await expectXmlInputValue(
+    page,
     '<root>\n  <mobile>yes</mobile>\n</root>'
   )
 
@@ -172,7 +184,7 @@ test('preserves mixed and preserve-space text in the production formatter', asyn
   )
   await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('#xml-input').inputValue()
+  const formatted = await xmlInputValue(page)
   expect(formatted).toBe(
     [
       '<root>',
@@ -212,7 +224,7 @@ test('preserves direct CDATA text through production formatting', async ({
   await page.locator('#xml-input').fill(input)
   await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('#xml-input').inputValue()
+  const formatted = await xmlInputValue(page)
   expect(formatted).toBe(
     [
       '<root>',
@@ -273,7 +285,7 @@ test('keeps the XML declaration before an xml-stylesheet PI', async ({
   await page.locator('#xml-input').fill(input)
   await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('#xml-input').inputValue()
+  const formatted = await xmlInputValue(page)
   const lines = formatted.split('\n')
   expect(lines[0]).toBe(declaration)
   expect(lines[1]).toBe(stylesheet)
@@ -318,7 +330,7 @@ test('preserves newline-plus-indent mixed text after production formatting', asy
   await page.locator('#xml-input').fill(input)
   await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('#xml-input').inputValue()
+  const formatted = await xmlInputValue(page)
   expect(formatted).toContain('<b>Hello</b>\n <i>world</i>')
   expect(formatted).toContain('<b>Hello</b>\n  <i>world</i>')
 
@@ -391,7 +403,7 @@ test('hides whitespace-only tree rows while formatting keeps separators', async 
 
   await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('#xml-input').inputValue()
+  const formatted = await xmlInputValue(page)
   expect(formatted).toContain('<p><b/>\n <i/></p>')
   expect(formatted).toContain('<p><b/>\n  <i/></p>')
   expect(formatted).toContain('<p><b/>\n\t<i/></p>')
@@ -439,7 +451,7 @@ test('keeps quote-bearing DOCTYPE output parsable and copyable', async ({
   )
   await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('#xml-input').inputValue()
+  const formatted = await xmlInputValue(page)
   expect(formatted).toBe('<!DOCTYPE root SYSTEM \'a"b\'>\n<root/>')
 
   const reparsed = await page.evaluate((xml) => {
@@ -471,8 +483,17 @@ test('converts xml to json and typescript and copies both', async ({
   const bar = page.locator('[data-testid="tool-action-bar"]')
   await expect(bar).toBeVisible()
   expect(
-    await page.locator('[data-action-id]').allTextContents()
-  ).toEqual(['格式化', '转 JSON 复制', '转 TS 复制', '复制 XML'])
+    await page.locator('[data-action-id]').evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('aria-label'))
+    )
+  ).toEqual([
+    '格式化',
+    '折叠全部',
+    '展开全部',
+    '转 JSON 复制',
+    '转 TS 复制',
+    '复制 XML'
+  ])
 
   await page
     .locator('#xml-input')
@@ -500,6 +521,251 @@ test('converts xml to json and typescript and copies both', async ({
   expect(errors).toEqual([])
 })
 
+test('shows line numbers, folds nodes, and keeps the window open for every action', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+  await page.locator('#xml-input').fill(sample)
+
+  const editor = page.getByTestId('xml-editor')
+  const lineNumbers = editor.locator('.cm-lineNumbers .cm-gutterElement')
+  const foldMarkers = editor.locator('.cm-foldGutter .cm-gutterElement')
+  await expect(editor.locator('.cm-lineNumbers')).toBeVisible()
+  await expect(editor.locator('.cm-foldGutter')).toBeVisible()
+  expect(await lineNumbers.count()).toBeGreaterThan(1)
+  expect(await foldMarkers.count()).toBeGreaterThan(0)
+
+  const expandedLineCount = await editor.locator('.cm-line').count()
+  await page.locator('[data-action-id="fold-all"]').click()
+  await expect
+    .poll(() => editor.locator('.cm-line').count())
+    .toBeLessThan(expandedLineCount)
+  await expect(page.locator('.tool-action-bar__status')).toHaveText(
+    '已折叠全部节点'
+  )
+
+  await page.locator('[data-action-id="unfold-all"]').click()
+  await expect
+    .poll(() => editor.locator('.cm-line').count())
+    .toBe(expandedLineCount)
+
+  await page.evaluate(() => window.__utoolsTest.resetCalls())
+  for (const actionId of [
+    'format',
+    'fold-all',
+    'unfold-all',
+    'to-json',
+    'to-typescript',
+    'to-xml'
+  ]) {
+    await page.locator(`[data-action-id="${actionId}"]`).click()
+  }
+
+  expect(
+    await page.evaluate(
+      () => window.__utoolsTest.getCalls().hideMainWindow
+    )
+  ).toEqual([])
+  expect(
+    await page.evaluate(() => window.__utoolsTest.getCalls().copyText)
+  ).toHaveLength(3)
+  expect(errors).toEqual([])
+})
+
+test('opens an XPath drawer, locates nodes, and selects in both panes', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+  await page.locator('#xml-input').fill(
+    [
+      '<root>',
+      '  <item id="1">Alpha</item>',
+      '  <item id="2">Beta</item>',
+      '  <meta><count>2</count></meta>',
+      '</root>'
+    ].join('\n')
+  )
+
+  const output = page.locator('.structured-tool__output')
+  await expect(output).toHaveCount(0)
+
+  const control = page.locator('.tool-action-bar .expression-input')
+  await expect(control.locator('.expression-input__prefix')).toHaveText('XPath')
+  await expect(control.locator('svg.tool-action-icon')).toBeVisible()
+
+  const filter = page.locator('#xml-xpath-filter')
+  const locate = page.getByRole('button', {
+    name: '定位到 XPath 对应节点'
+  })
+  const editor = page.getByTestId('xml-editor')
+  const expandedLineCount = await editor.locator('.cm-line').count()
+  await filter.click()
+  await page.keyboard.press('Alt+Period')
+  await expect(editor.locator('.cm-line')).toHaveCount(expandedLineCount)
+  await expect(locate).toBeDisabled()
+
+  await filter.fill('//item[2]')
+  await expect(output).toBeVisible()
+  await expect(page.getByTestId('xml-filter-output')).toHaveAttribute(
+    'data-value',
+    /<item id="2">Beta<\/item>/
+  )
+  await expect(locate).toBeEnabled()
+  await locate.click()
+
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+    .toContain('Beta')
+  await expect(page.locator('.tool-action-bar__status')).toHaveText(
+    '已定位到 XPath 对应节点'
+  )
+
+  await filter.fill('count(//item)')
+  await expect(page.getByTestId('xml-filter-output')).toHaveAttribute(
+    'data-value',
+    '2'
+  )
+  await expect(locate).toBeDisabled()
+
+  await filter.fill('//item[1]/@id')
+  await locate.click()
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+    .toBe('id="1"')
+
+  await filter.fill('//[')
+  await expect(page.getByTestId('xml-filter-output')).toHaveAttribute(
+    'data-value',
+    /XPath 执行失败/
+  )
+
+  await filter.fill('//item[1]')
+  await page.locator('#xml-input').click()
+  await page.keyboard.press('Control+a')
+  expect(
+    await page.evaluate(() => window.getSelection()?.toString()?.length ?? 0)
+  ).toBeGreaterThan(0)
+
+  await page.locator('#xml-filter-output').click()
+  await page.keyboard.press('Control+a')
+  expect(
+    await page.evaluate(() => window.getSelection()?.toString()?.length ?? 0)
+  ).toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: '关闭过滤结果' }).click()
+  await expect(output).toHaveCount(0)
+
+  await page.setViewportSize({ width: 320, height: 800 })
+  await expectNoPageOverflow(page)
+  expect(errors).toEqual([])
+})
+
+test('locates entity references and mixed-content text nodes', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+  await page
+    .locator('#xml-input')
+    .fill('<root><item>x&amp;y<em>z</em>tail</item></root>')
+
+  const filter = page.locator('#xml-xpath-filter')
+  const locate = page.getByRole('button', {
+    name: '定位到 XPath 对应节点'
+  })
+
+  await filter.fill('//item[1]/text()[1]')
+  await expect(page.getByTestId('xml-filter-output')).toHaveAttribute(
+    'data-value',
+    'x&y'
+  )
+  await locate.click()
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+    .toBe('x&amp;y')
+
+  await filter.fill('//item[1]/text()[2]')
+  await expect(page.getByTestId('xml-filter-output')).toHaveAttribute(
+    'data-value',
+    'tail'
+  )
+  await locate.click()
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.toString() ?? ''))
+    .toBe('tail')
+
+  expect(errors).toEqual([])
+})
+
+test('pins the indexed parent path of the top visible XML node', async ({
+  page
+}) => {
+  const errors = collectPageErrors(page)
+  await enterXml(page)
+
+  const items = Array.from(
+    { length: 200 },
+    (_, index) =>
+      `  <item id="${index}"><value>v-${index}</value></item>`
+  ).join('\n')
+  await page.locator('#xml-input').fill(`<root>\n${items}\n</root>`)
+
+  const scrollTo = (scrollTop) =>
+    page.evaluate((top) => {
+      document.querySelector(
+        '[data-testid="xml-editor"] .cm-scroller'
+      ).scrollTop = top
+    }, scrollTop)
+  const sticky = page.locator('[data-testid="code-editor-sticky-path"]')
+
+  await scrollTo(100)
+  await expect(sticky).toBeVisible()
+  const first = await page.evaluate(() => {
+    const scroller = document.querySelector(
+      '[data-testid="xml-editor"] .cm-scroller'
+    )
+    const top = scroller.getBoundingClientRect().top
+    const line = Array.from(scroller.querySelectorAll('.cm-line')).find(
+      (candidate) => candidate.getBoundingClientRect().bottom > top + 0.5
+    )
+    return {
+      line: line?.textContent ?? '',
+      path: document
+        .querySelector('[data-testid="code-editor-sticky-path"]')
+        ?.textContent?.trim() ?? ''
+    }
+  })
+  const firstId = Number(/<item id="(\d+)"/.exec(first.line)?.[1])
+  expect(firstId).not.toBeNaN()
+  expect(first.path).toBe(`root › item[${firstId + 1}]`)
+
+  await scrollTo(700)
+  await expect(sticky).toBeVisible()
+  const second = await page.evaluate(() => {
+    const scroller = document.querySelector(
+      '[data-testid="xml-editor"] .cm-scroller'
+    )
+    const top = scroller.getBoundingClientRect().top
+    const line = Array.from(scroller.querySelectorAll('.cm-line')).find(
+      (candidate) => candidate.getBoundingClientRect().bottom > top + 0.5
+    )
+    return {
+      line: line?.textContent ?? '',
+      path: document
+        .querySelector('[data-testid="code-editor-sticky-path"]')
+        ?.textContent?.trim() ?? ''
+    }
+  })
+  const secondId = Number(/<item id="(\d+)"/.exec(second.line)?.[1])
+  expect(secondId).not.toBeNaN()
+  expect(second.path).toBe(`root › item[${secondId + 1}]`)
+  expect(second.path).not.toBe(first.path)
+
+  expect(errors).toEqual([])
+})
+
 test('ignores DOCTYPE-like comment and PI text in production formatting', async ({
   page
 }) => {
@@ -515,7 +781,7 @@ test('ignores DOCTYPE-like comment and PI text in production formatting', async 
   await page.locator('#xml-input').fill(input)
   await page.getByRole('button', { name: '格式化' }).click()
 
-  const formatted = await page.locator('#xml-input').inputValue()
+  const formatted = await xmlInputValue(page)
   expect(formatted).toContain(
     '<!DOCTYPE root PUBLIC "pub\'id" \'sys"id\'>'
   )
